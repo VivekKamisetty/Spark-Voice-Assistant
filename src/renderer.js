@@ -1,11 +1,10 @@
-const { ipcRenderer } = require('electron');
-
-ipcRenderer.on('trigger-listen', () => {
-  const bubble = document.getElementById('bubble');
-  bubble.textContent = '🎙️ Listening...';
-
-  // revert back to idle after 2 sec
-  setTimeout(() => {
+window.sparkAPI.onListen(() => {
+    const bubble = document.getElementById('bubble');
+    bubble.style.display = 'flex';
     bubble.textContent = 'Spark';
-  }, 2000);
-});
+  
+    setTimeout(() => {
+      bubble.style.display = 'none';
+    }, 10000);
+  });
+  

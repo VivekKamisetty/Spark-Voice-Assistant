@@ -1,3 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('ipcRenderer', ipcRenderer);
+contextBridge.exposeInMainWorld('sparkAPI', {
+  onListen: (callback) => ipcRenderer.on('trigger-listen', callback),
+});

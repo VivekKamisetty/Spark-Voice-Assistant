@@ -20,5 +20,15 @@
   "homepage": "https://github.com/VivekKamisetty/Spark-Voice-Assistant#readme",
   "devDependencies": {
     "electron": "^35.1.5"
-  }
+  },
+  "build": {
+    "mac": {
+       "hardenedRuntime": true,
+       "entitlements": "entitlements.mac.plist",
+       "extendInfo": {
+            "NSMicrophoneUsageDescription": "Please give us access to your microphone"
+        }
+    }
 }
+}
+

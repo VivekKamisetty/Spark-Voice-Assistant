@@ -40,8 +40,12 @@ app.whenReady().then(() => {
         '-m', modelPath,
         '-t', '4',
         '--no-gpu',
-        '-c', '1' // correct mic ID
+        '-c', '1',
+        '--step', '5000',
+        '--keep', '100',
+        '--vad-thold', '0.8',
       ]);
+      
       
   
       whisperProcess.stdout.on('data', (data) => {

@@ -1,2 +1,14 @@
+# whisper build artifacts
+/whisper/build
+/whisper/models
+/whisper/main
+*.bin
+
+# Node modules
+/node_modules
+
+# Environment secrets
 .env
-node_modules/
+
+# Mac system files
+.DS_Store

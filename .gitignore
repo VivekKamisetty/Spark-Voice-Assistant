@@ -1,7 +1,5 @@
 # whisper build artifacts
-/whisper/build
-/whisper/models
-/whisper/main
+/whisper/
 *.bin
 
 # Node modules

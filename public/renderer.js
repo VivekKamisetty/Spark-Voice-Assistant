@@ -6,7 +6,7 @@ function showBubble(text) {
 
   setTimeout(() => {
     bubble.classList.remove('show');
-  }, 10000);
+  }, 100000);
 }
 
 window.sparkAPI.onListen(() => {

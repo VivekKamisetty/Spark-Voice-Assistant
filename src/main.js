@@ -12,6 +12,12 @@ const openai = new OpenAI({
 
 let win;
 let whisperProcess;
+let chatHistory = [
+  {
+    role: 'system',
+    content: 'You are Spark, a helpful and concise voice assistant.'
+  }
+];
 
 const { screen } = require('electron');
 
@@ -68,41 +74,73 @@ app.whenReady().then(() => {
   
       whisperProcess.stdout.on('data', async (data) => {
         const output = data.toString().trim();
+
+        if (!output || output.trim().length === 0 || ['"', "''", '""'].includes(output)) {
+          console.log(`[Spark] Ignored totally blank or quote-only output: "${output}"`);
+          return;
+        }
       
-        if (
-          output.length > 0 &&
-          !output.includes('init:') &&
-          !output.includes('whisper_') &&
-          !output.includes('model_load:') &&
-          !output.includes('main:') &&
-          !output.includes('[ Silence ]') &&
-          !output.includes('[BLANK_AUDIO]')
-        ) {
-          console.log(`[Spark Whisper] ${output}`);
+        // ==========================
+        // 🎯 Filtering low-value inputs
+        // ==========================
+        const cleanedOutput = output.toLowerCase().replace(/["'\[\]]/g, '').trim();
+
+        const tooShort = cleanedOutput.length < 4;
+        const symbolsOnly = /^\W+$/.test(cleanedOutput);
+
+        const knownNoise = [
+          'blank_audio',
+          'silence',
+          'noise',
+          'init:',
+          'whisper_',
+          'model_load:',
+          'main:'
+        ].some(sub => cleanedOutput.includes(sub));
+
+        const lowIntent = [
+          'uh', 'hmm', 'mmm', 'okay', 'yes', 'no', 'i see',
+          'sure', 'huh', 'yo', 'hi', 'hello', 'spark', 'hey',
+          'can you help', 'can i help', 'help me', 'what', 'can you'
+        ].some(p => cleanedOutput.includes(p));
+
+        if (tooShort || symbolsOnly || knownNoise || lowIntent) {
+          console.log(`[Spark] Ignored low-value input: "${output}"`);
+          return;
+        }
       
-          try {
-            const completion = await openai.chat.completions.create({
-              model: 'gpt-3.5-turbo-0125',
-              messages: [
-                {
-                  role: 'system',
-                  content: 'You are Spark, a helpful and concise voice assistant.'
-                },
-                {
-                  role: 'user',
-                  content: output
-                }
-              ]
+        console.log(`[Spark Whisper] ${output}`);
+      
+        try {
+          // ✅ Add user message to history
+          chatHistory.push({ role: 'user', content: output });
+      
+          const completion = await openai.chat.completions.create({
+            model: 'gpt-3.5-turbo-0125',
+            messages: chatHistory
+          });
+      
+          const reply = completion.choices[0].message.content;
+      
+          // ✅ Add assistant message to history
+          chatHistory.push({ role: 'assistant', content: reply });
+      
+          // ✅ Limit to last 20 turns
+          if (chatHistory.length > 20) {
+            chatHistory = chatHistory.slice(-18);
+            chatHistory.unshift({
+              role: 'system',
+              content: 'You are Spark, a helpful and concise voice assistant.'
             });
-      
-            const reply = completion.choices[0].message.content;
-            console.log(`[Spark GPT] ${reply}`);
-            win.webContents.send('gpt-response', reply);
-          } catch (err) {
-            console.error(`[Spark GPT Error]`, err.message);
           }
+      
+          console.log(`[Spark GPT] ${reply}`);
+          win.webContents.send('gpt-response', reply);
+        } catch (err) {
+          console.error(`[Spark GPT Error]`, err.message);
         }
       });
+      
       
       
   

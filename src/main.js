@@ -2,24 +2,42 @@ const { app, BrowserWindow, globalShortcut } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 
+require('dotenv').config();
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+
 let win;
 let whisperProcess;
 
+const { screen } = require('electron');
+
 function createWindow() {
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+
   win = new BrowserWindow({
     width: 200,
     height: 200,
+    x: width - 240, // places window near top-right (with padding)
+    y: 40,
     frame: false,
     transparent: true,
+    focusable: false,
     alwaysOnTop: true,
     resizable: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload.js'),
+      nodeIntegration: false, // make sure this is false
+      contextIsolation: true,
+      enableRemoteModule: true
     }
   });
 
   win.loadFile('public/index.html');
-  win.setIgnoreMouseEvents(false); // can be toggled to let clicks pass through
+  win.setIgnoreMouseEvents(true);
 }
 
 app.whenReady().then(() => {
@@ -48,10 +66,9 @@ app.whenReady().then(() => {
       
       
   
-      whisperProcess.stdout.on('data', (data) => {
+      whisperProcess.stdout.on('data', async (data) => {
         const output = data.toString().trim();
       
-        // Ignore Whisper debug stuff
         if (
           output.length > 0 &&
           !output.includes('init:') &&
@@ -62,9 +79,31 @@ app.whenReady().then(() => {
           !output.includes('[BLANK_AUDIO]')
         ) {
           console.log(`[Spark Whisper] ${output}`);
-          win.webContents.send('transcription', output);
+      
+          try {
+            const completion = await openai.chat.completions.create({
+              model: 'gpt-3.5-turbo-0125',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are Spark, a helpful and concise voice assistant.'
+                },
+                {
+                  role: 'user',
+                  content: output
+                }
+              ]
+            });
+      
+            const reply = completion.choices[0].message.content;
+            console.log(`[Spark GPT] ${reply}`);
+            win.webContents.send('gpt-response', reply);
+          } catch (err) {
+            console.error(`[Spark GPT Error]`, err.message);
+          }
         }
       });
+      
       
   
       whisperProcess.stderr.on('data', (data) => {

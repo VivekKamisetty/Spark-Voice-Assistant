@@ -18,3 +18,7 @@
     ./build/bin/whisper-stream -m models/ggml-base.en.bin -t 4 --no-gpu -c 1
 
 Spark uses whisper-stream from this repo for local mic transcription.
+
+## High-Level Architecture Diagram
+
+![alt text](image.png)

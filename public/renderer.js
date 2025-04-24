@@ -1,4 +1,5 @@
 console.log('[Spark Renderer] Loaded');
+
 function showBubble(text) {
   const bubble = document.getElementById('bubble');
   bubble.textContent = text;
@@ -6,15 +7,27 @@ function showBubble(text) {
 
   setTimeout(() => {
     bubble.classList.remove('show');
-  }, 100000);
+  }, 10000);
 }
 
-window.sparkAPI.onListen(() => {
-  showBubble('Spark Listening...');
-});
+let lastReply = "";
 
-window.sparkAPI.onGPTResponse((_, reply) => {
-  showBubble(reply);
-});
+async function pollSparkReply() {
+  try {
+    const res = await fetch('spark_output.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('Failed to fetch spark output');
 
-  
+    const data = await res.json();
+    const reply = data.reply;
+
+    if (reply && reply !== lastReply) {
+      lastReply = reply;
+      console.log('[Spark Renderer] New reply:', reply);
+      showBubble(reply);
+    }
+  } catch (err) {
+    console.error('[Spark Renderer] Error reading reply:', err.message);
+  }
+}
+
+setInterval(pollSparkReply, 1000);

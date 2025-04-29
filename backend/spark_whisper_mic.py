@@ -63,6 +63,9 @@ def mic_listener(transcript_queue):
                 max_amplitude = np.max(np.abs(block))
                 #print(f"[DEBUG] Max amplitude: {max_amplitude:.6f}")
 
+                if max_amplitude < 0.0001:
+                    continue  # Skip ultra-silent noise blocks (noise gate)
+
                 if max_amplitude > vad_threshold:
                     audio_data.append(block)
                     speech_detected = True

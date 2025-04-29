@@ -1,17 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const outputPath = path.join(__dirname, 'spark_output.json');
+const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json');
 let lastStatus = "";
-let backendStarted = false; // 🚀 Track if Spark backend really started
-
-// 🧹 Clean up old output file on app start
-function resetSparkOutput() {
-  if (fs.existsSync(outputPath)) {
-    fs.unlinkSync(outputPath);
-    console.log('[Spark Main] 🧹 Old spark_output.json deleted.');
-  }
-}
 
 function pollSparkStatus() {
   fs.readFile(outputPath, 'utf8', (err, data) => {
@@ -22,7 +13,7 @@ function pollSparkStatus() {
 
     try {
       const json = JSON.parse(data);
-      const status = json.status; // read `status`!
+      const status = json.status;
 
       if (status !== lastStatus) {
         lastStatus = status;
@@ -36,16 +27,10 @@ function pollSparkStatus() {
 
 function updateBubble(status) {
   const bubble = document.getElementById('bubble');
-
-  // 🚨 Show only if backend actually started AND valid status
-  if (['listening', 'thinking', 'speaking'].includes(status)) {
-    backendStarted = true;
-    bubble.style.display = 'block'; // show bubble
-  } else if (!backendStarted) {
-    bubble.style.display = 'none'; // still hide if backend not really started
+  if (!bubble.classList.contains('show')) {
+    bubble.classList.add('show');
   }
-
-  bubble.className = ''; // clear previous classes
+  bubble.className = 'show'; // Reset all classes but keep 'show'
 
   if (status === 'listening') {
     bubble.classList.add('listening');

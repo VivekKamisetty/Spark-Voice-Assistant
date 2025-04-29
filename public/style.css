@@ -1,55 +1,38 @@
 #bubble {
-    display: none; /* 🚨 Must be hidden */
-    width: 100px;
-    height: 100px;
-    background: white;
+    width: 75px;
+    height: 75px;
+    background-color: white; /* <-- white base */
     border-radius: 50%;
-    margin: 50px auto;
+    margin: 100px auto;
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
-    position: relative;
-    overflow: visible;
-    transition: background-color 0.5s ease, box-shadow 0.5s ease;
+    opacity: 0;
+    transition: opacity 0.4s ease-in-out;
   }
   
-  /* LISTENING */
+  /* Show the bubble only after status appears */
+  #bubble.show {
+    opacity: 1;
+  }
+  
+  /* Listening status: green pulse */
   .listening {
     background-color: #4CAF50;
     animation: pulse-listening 2s infinite;
   }
   
-  /* THINKING */
+  /* Thinking status: blue pulse */
   .thinking {
     background-color: #2196F3;
     animation: pulse-thinking 1.5s infinite;
   }
   
-  /* SPEAKING */
+  /* Speaking status: yellow ripple */
   .speaking {
     background-color: #FFC107;
-    animation: none; /* stop pulses */
+    animation: ripple-speaking 2s infinite;
   }
   
-  /* Create ripple effect on speaking */
-  .speaking::before, .speaking::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 100px;
-    height: 100px;
-    border-radius: 50%;
-    background: rgba(255, 193, 7, 0.4);
-    transform: translate(-50%, -50%) scale(1);
-    opacity: 0.6;
-    z-index: -1;
-    animation: ripple 2.5s infinite ease-out;
-  }
-  
-  .speaking::after {
-    animation-delay: 1.25s;
-  }
-  
-  /* ANIMATIONS */
+  /* Pulse animations */
   @keyframes pulse-listening {
     0% { box-shadow: 0 0 10px #4CAF50; }
     50% { box-shadow: 0 0 30px #4CAF50; }
@@ -62,14 +45,16 @@
     100% { box-shadow: 0 0 10px #2196F3; }
   }
   
-  @keyframes ripple {
+  /* Ripple for speaking */
+  @keyframes ripple-speaking {
     0% {
-      transform: translate(-50%, -50%) scale(1);
-      opacity: 0.6;
+      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
+    }
+    70% {
+      box-shadow: 0 0 0 20px rgba(255, 193, 7, 0);
     }
     100% {
-      transform: translate(-50%, -50%) scale(3);
-      opacity: 0;
+      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
     }
   }
   

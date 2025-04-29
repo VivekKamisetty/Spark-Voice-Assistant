@@ -1,47 +1,74 @@
 #bubble {
-    width: 100px;    /* 🧩 smaller */
-    height: 100px;   /* 🧩 smaller */
+    width: 75px;
+    height: 75px;
     background: white;
     border-radius: 50%;
-    margin: 100px auto;
-    box-shadow: 0 0 20px rgba(0,0,0,0.2);
-    transition: all 0.5s ease;
-    transform: scale(1);
-}
-
-/* Listening */
-.listening {
+    margin: 50px auto;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+    position: relative;
+    overflow: visible;
+    transition: background-color 0.5s ease, box-shadow 0.5s ease;
+  }
+  
+  /* LISTENING */
+  .listening {
     background-color: #4CAF50;
     animation: pulse-listening 2s infinite;
-}
-
-/* Thinking */
-.thinking {
+  }
+  
+  /* THINKING */
+  .thinking {
     background-color: #2196F3;
-    animation: pulse-thinking 2s infinite;
-}
-
-/* Speaking */
-.speaking {
+    animation: pulse-thinking 1.5s infinite;
+  }
+  
+  /* SPEAKING */
+  .speaking {
     background-color: #FFC107;
-    animation: pulse-speaking 1.5s infinite;
-}
-
-/* --- New breathing animations --- */
-@keyframes pulse-listening {
-    0% { transform: scale(1); box-shadow: 0 0 10px #4CAF50; }
-    50% { transform: scale(1.1); box-shadow: 0 0 30px #4CAF50; }
-    100% { transform: scale(1); box-shadow: 0 0 10px #4CAF50; }
-}
-
-@keyframes pulse-thinking {
-    0% { transform: scale(1); box-shadow: 0 0 10px #2196F3; }
-    50% { transform: scale(1.1); box-shadow: 0 0 25px #2196F3; }
-    100% { transform: scale(1); box-shadow: 0 0 10px #2196F3; }
-}
-
-@keyframes pulse-speaking {
-    0% { transform: scale(1); box-shadow: 0 0 10px #FFC107; }
-    50% { transform: scale(1.1); box-shadow: 0 0 35px #FFC107; }
-    100% { transform: scale(1); box-shadow: 0 0 10px #FFC107; }
-}
+    animation: none; /* stop pulses */
+  }
+  
+  /* Create ripple effect on speaking */
+  .speaking::before, .speaking::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: rgba(255, 193, 7, 0.4);
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.6;
+    z-index: -1;
+    animation: ripple 2.5s infinite ease-out;
+  }
+  
+  .speaking::after {
+    animation-delay: 1.25s;
+  }
+  
+  /* ANIMATIONS */
+  @keyframes pulse-listening {
+    0% { box-shadow: 0 0 10px #4CAF50; }
+    50% { box-shadow: 0 0 30px #4CAF50; }
+    100% { box-shadow: 0 0 10px #4CAF50; }
+  }
+  
+  @keyframes pulse-thinking {
+    0% { box-shadow: 0 0 10px #2196F3; }
+    50% { box-shadow: 0 0 25px #2196F3; }
+    100% { box-shadow: 0 0 10px #2196F3; }
+  }
+  
+  @keyframes ripple {
+    0% {
+      transform: translate(-50%, -50%) scale(1);
+      opacity: 0.6;
+    }
+    100% {
+      transform: translate(-50%, -50%) scale(3);
+      opacity: 0;
+    }
+  }
+  

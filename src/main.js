@@ -10,9 +10,9 @@ function createWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 200,
-    height: 200,
-    x: width - 240, // top-right positioning
+    width: 300,   // <== make it 300
+    height: 300,  // <== make it 300
+    x: width - 340, // adjust slightly
     y: 40,
     frame: false,
     transparent: true,
@@ -20,9 +20,14 @@ function createWindow() {
     alwaysOnTop: true,
     resizable: false,
     webPreferences: {
-      contextIsolation: true
+      nodeIntegration: true,
+      contextIsolation: false,
     }
-  });
+});
+
+  
+  
+
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);

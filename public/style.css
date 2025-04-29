@@ -1,0 +1,47 @@
+#bubble {
+    width: 100px;    /* 🧩 smaller */
+    height: 100px;   /* 🧩 smaller */
+    background: white;
+    border-radius: 50%;
+    margin: 100px auto;
+    box-shadow: 0 0 20px rgba(0,0,0,0.2);
+    transition: all 0.5s ease;
+    transform: scale(1);
+}
+
+/* Listening */
+.listening {
+    background-color: #4CAF50;
+    animation: pulse-listening 2s infinite;
+}
+
+/* Thinking */
+.thinking {
+    background-color: #2196F3;
+    animation: pulse-thinking 2s infinite;
+}
+
+/* Speaking */
+.speaking {
+    background-color: #FFC107;
+    animation: pulse-speaking 1.5s infinite;
+}
+
+/* --- New breathing animations --- */
+@keyframes pulse-listening {
+    0% { transform: scale(1); box-shadow: 0 0 10px #4CAF50; }
+    50% { transform: scale(1.1); box-shadow: 0 0 30px #4CAF50; }
+    100% { transform: scale(1); box-shadow: 0 0 10px #4CAF50; }
+}
+
+@keyframes pulse-thinking {
+    0% { transform: scale(1); box-shadow: 0 0 10px #2196F3; }
+    50% { transform: scale(1.1); box-shadow: 0 0 25px #2196F3; }
+    100% { transform: scale(1); box-shadow: 0 0 10px #2196F3; }
+}
+
+@keyframes pulse-speaking {
+    0% { transform: scale(1); box-shadow: 0 0 10px #FFC107; }
+    50% { transform: scale(1.1); box-shadow: 0 0 35px #FFC107; }
+    100% { transform: scale(1); box-shadow: 0 0 10px #FFC107; }
+}

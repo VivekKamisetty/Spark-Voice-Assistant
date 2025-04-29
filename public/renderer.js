@@ -1,33 +1,40 @@
-console.log('[Spark Renderer] Loaded');
+const fs = require('fs');
+const path = require('path');
 
-function showBubble(text) {
-  const bubble = document.getElementById('bubble');
-  bubble.textContent = text;
-  bubble.classList.add('show');
+const outputPath = path.join(__dirname, 'spark_output.json');
+let lastStatus = "";
 
-  setTimeout(() => {
-    bubble.classList.remove('show');
-  }, 10000);
+function pollSparkStatus() {
+  fs.readFile(outputPath, 'utf8', (err, data) => {
+    if (err) {
+      console.error('[Spark UI] Error reading output:', err);
+      return;
+    }
+
+    try {
+      const json = JSON.parse(data);
+      const status = json.status; // read status!
+
+      if (status !== lastStatus) {
+        lastStatus = status;
+        updateBubble(status);
+      }
+    } catch (error) {
+      console.error('[Spark UI] Error parsing JSON:', error);
+    }
+  });
 }
 
-let lastReply = "";
-
-async function pollSparkReply() {
-  try {
-    const res = await fetch('spark_output.json', { cache: 'no-store' });
-    if (!res.ok) throw new Error('Failed to fetch spark output');
-
-    const data = await res.json();
-    const reply = data.reply;
-
-    if (reply && reply !== lastReply) {
-      lastReply = reply;
-      console.log('[Spark Renderer] New reply:', reply);
-      showBubble(reply);
-    }
-  } catch (err) {
-    console.error('[Spark Renderer] Error reading reply:', err.message);
+function updateBubble(status) {
+  const bubble = document.getElementById('bubble');
+  bubble.className = ''; // clear previous
+  if (status === 'listening') {
+    bubble.classList.add('listening');
+  } else if (status === 'thinking') {
+    bubble.classList.add('thinking');
+  } else if (status === 'speaking') {
+    bubble.classList.add('speaking');
   }
 }
 
-setInterval(pollSparkReply, 1000);
+setInterval(pollSparkStatus, 500);

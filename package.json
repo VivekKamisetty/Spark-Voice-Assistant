@@ -4,7 +4,8 @@
   "description": "",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron src/main.js",
+    "dev": "concurrently \"npm run start\" \"cd backend && python3 spark_whisper_mic.py\""
   },
   "repository": {
     "type": "git",
@@ -19,6 +20,7 @@
   },
   "homepage": "https://github.com/VivekKamisetty/Spark-Voice-Assistant#readme",
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "electron": "^35.1.5"
   },
   "build": {

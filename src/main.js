@@ -1,33 +1,21 @@
-const { app, BrowserWindow, globalShortcut } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
-
-require('dotenv').config();
-const { OpenAI } = require('openai');
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
+const fs = require('fs'); // <-- 💥 IMPORTANT! you missed this
 
 let win;
-let whisperProcess;
-let chatHistory = [
-  {
-    role: 'system',
-    content: 'You are Spark, a helpful and concise voice assistant.'
-  }
-];
+let sparkProcess = null;
 
-const { screen } = require('electron');
+const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json'); // <-- You also missed defining this before using
 
 function createWindow() {
+  const { screen } = require('electron');
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 200,
-    height: 200,
-    x: width - 240, // places window near top-right (with padding)
+    width: 300,    // nice
+    height: 300,   // nice
+    x: width - 340, 
     y: 40,
     frame: false,
     transparent: true,
@@ -35,130 +23,57 @@ function createWindow() {
     alwaysOnTop: true,
     resizable: false,
     webPreferences: {
-      preload: path.join(__dirname, '../preload.js'),
-      nodeIntegration: false, // make sure this is false
-      contextIsolation: true,
-      enableRemoteModule: true
+      nodeIntegration: true,
+      contextIsolation: false,
     }
   });
 
-  win.loadFile('public/index.html');
-  win.setIgnoreMouseEvents(true);
+  const indexPath = path.join(__dirname, '../public/index.html');
+  win.loadFile(indexPath);
+  win.setIgnoreMouseEvents(true); // let clicks pass through
+}
+
+function resetSparkOutput() {
+  if (fs.existsSync(outputPath)) {
+    fs.unlinkSync(outputPath);
+    console.log('[Spark Main] 🧹 Old spark_output.json deleted.');
+  }
+}
+
+function startSparkBackend() {
+  if (!sparkProcess) {
+    console.log('[Spark Main] 🚀 Starting backend...');
+    sparkProcess = spawn('python3', ['backend/spark_whisper_mic.py']);
+
+    sparkProcess.stdout.on('data', (data) => {
+      console.log(`[Spark] ${data}`);
+    });
+
+    sparkProcess.stderr.on('data', (data) => {
+      console.error(`[Spark Error] ${data}`);
+    });
+
+    sparkProcess.on('close', (code) => {
+      console.log(`[Spark] exited with code ${code}`);
+      sparkProcess = null;
+    });
+  }
 }
 
 app.whenReady().then(() => {
-    createWindow();
-  
-    globalShortcut.register('CommandOrControl+Shift+S', () => {
-      if (whisperProcess) {
-        whisperProcess.kill();
-        whisperProcess = null;
-      }
+  resetSparkOutput();  // 🧹 very good!
+  createWindow();
 
-      win.webContents.send('trigger-listen'); // 👈 make bubble appear again
-  
-      const modelPath = path.join(__dirname, '../whisper/models/ggml-base.en.bin');
-      const binaryPath = path.join(__dirname, '../whisper/build/bin/whisper-stream');
-  
-      whisperProcess = spawn(binaryPath, [
-        '-m', modelPath,
-        '-t', '4',
-        '--no-gpu',
-        '-c', '1',
-        '--step', '5000',
-        '--keep', '100',
-        '--vad-thold', '0.8',
-      ]);
-      
-      
-  
-      whisperProcess.stdout.on('data', async (data) => {
-        const output = data.toString().trim();
-
-        if (!output || output.trim().length === 0 || ['"', "''", '""'].includes(output)) {
-          console.log(`[Spark] Ignored totally blank or quote-only output: "${output}"`);
-          return;
-        }
-      
-        // ==========================
-        // 🎯 Filtering low-value inputs
-        // ==========================
-        const cleanedOutput = output.toLowerCase().replace(/["'\[\]]/g, '').trim();
-
-        const tooShort = cleanedOutput.length < 4;
-        const symbolsOnly = /^\W+$/.test(cleanedOutput);
-
-        const knownNoise = [
-          'blank_audio',
-          'silence',
-          'noise',
-          'init:',
-          'whisper_',
-          'model_load:',
-          'main:'
-        ].some(sub => cleanedOutput.includes(sub));
-
-        const lowIntent = [
-          'uh', 'hmm', 'mmm', 'okay', 'yes', 'no', 'i see',
-          'sure', 'huh', 'yo', 'hi', 'hello', 'spark', 'hey',
-          'can you help', 'can i help', 'help me', 'what', 'can you'
-        ].some(p => cleanedOutput.includes(p));
-
-        if (tooShort || symbolsOnly || knownNoise || lowIntent) {
-          console.log(`[Spark] Ignored low-value input: "${output}"`);
-          return;
-        }
-      
-        console.log(`[Spark Whisper] ${output}`);
-      
-        try {
-          // ✅ Add user message to history
-          chatHistory.push({ role: 'user', content: output });
-      
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo-0125',
-            messages: chatHistory
-          });
-      
-          const reply = completion.choices[0].message.content;
-      
-          // ✅ Add assistant message to history
-          chatHistory.push({ role: 'assistant', content: reply });
-      
-          // ✅ Limit to last 20 turns
-          if (chatHistory.length > 20) {
-            chatHistory = chatHistory.slice(-18);
-            chatHistory.unshift({
-              role: 'system',
-              content: 'You are Spark, a helpful and concise voice assistant.'
-            });
-          }
-      
-          console.log(`[Spark GPT] ${reply}`);
-          win.webContents.send('gpt-response', reply);
-        } catch (err) {
-          console.error(`[Spark GPT Error]`, err.message);
-        }
-      });
-      
-      
-      
-  
-      whisperProcess.stderr.on('data', (data) => {
-        const error = data.toString().trim();
-        if (error.length > 0) {
-          console.error(`[Spark Whisper STDERR] ${error}`);
-        }
-      });
-      
-  
-      whisperProcess.on('exit', () => {
-        console.log('[Whisper] Process ended.');
-      });
-    });
+  globalShortcut.register('CommandOrControl+Shift+S', () => {
+    win.reload();
   });
-  
-  app.on('will-quit', () => {
-    globalShortcut.unregisterAll();
-    if (whisperProcess) whisperProcess.kill();
+
+  globalShortcut.register('Space', () => {
+    console.log('[Spark Main] 🔥 Spacebar pressed!');
+    startSparkBackend();
   });
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});

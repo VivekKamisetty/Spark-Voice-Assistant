@@ -10,7 +10,7 @@ import warnings
 
 from gpt_client import get_gpt_reply
 from tts import speak
-from bridge import write_to_bubble
+from bridge import write_status
 
 warnings.filterwarnings("ignore", category=UserWarning, module='whisper.transcribe')
 print = functools.partial(print, flush=True)
@@ -52,6 +52,7 @@ def mic_listener(transcript_queue):
     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, callback=audio_callback):
         while True:
             print("[Spark] 🎧 Listening...")
+            write_status("listening")
             audio_data = []
             speech_detected = False
             silence_timer = None
@@ -94,34 +95,39 @@ def mic_listener(transcript_queue):
                 print("[Whisper] No valid text transcribed.")
 
 def main():
-    print("[Spark] Starting up with automatic mic detection...")
+    print("[Spark] Starting up with VAD and hotkeys...")
     unmute_microphone()
     chat_history = []
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
 
+    write_status("listening")  # 🟢 Show listening when ready
+
     while True:
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
+
             if len(line.split()) <= 1:
                 print(f"[Spark] Ignored too-short input: '{line}'")
+                write_status("listening")  # Reset to listening
                 continue
 
-            print(f"[Spark] Received: {line}")
+            print(f"[Spark] [User] {line}")
             chat_history.append({"role": "user", "content": line})
+
+            write_status("thinking")  # 🔵 Thinking mode
             reply = get_gpt_reply(line, chat_history)
-            print(f"[GPT] {reply}")
+
+            print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
 
-            print("[Spark] 🗣️ Speaking...")
+            write_status("speaking")  # 🟡 Speaking mode
             mute_microphone()
             speak(reply)
             unmute_microphone()
 
-            print("[Spark] 🎯 Ready for next question.")
+            write_status("listening")  # 🟢 After speaking, ready again
             time.sleep(0.5)
-
-            write_to_bubble(reply)
 
             if len(chat_history) > 20:
                 chat_history = chat_history[-18:]

@@ -1,0 +1,64 @@
+#bubble {
+    position: fixed;
+    top: -80px;         /* distance from the top */
+    right: 10px;       /* distance from the right */
+    width: 75px;
+    height: 75px;
+    background-color: rgb(119, 99, 192); /* <-- white base */
+    border-radius: 50%;
+    margin: 100px auto;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    transition: opacity 0.4s ease-in-out;
+    z-index: 9999;
+  }
+  
+  /* Show the bubble only after status appears */
+  #bubble.show {
+    opacity: 1;
+  }
+  
+  /* Listening status: green pulse */
+  .listening {
+    background-color: #4CAF50;
+    animation: pulse-listening 2s infinite;
+  }
+  
+  /* Thinking status: blue pulse */
+  .thinking {
+    background-color: #2196F3;
+    animation: pulse-thinking 1.5s infinite;
+  }
+  
+  /* Speaking status: yellow ripple */
+  .speaking {
+    background-color: #FFC107;
+    animation: ripple-speaking 2s infinite;
+  }
+  
+  /* Pulse animations */
+  @keyframes pulse-listening {
+    0% { box-shadow: 0 0 10px #4CAF50; }
+    50% { box-shadow: 0 0 30px #4CAF50; }
+    100% { box-shadow: 0 0 10px #4CAF50; }
+  }
+  
+  @keyframes pulse-thinking {
+    0% { box-shadow: 0 0 10px #2196F3; }
+    50% { box-shadow: 0 0 25px #2196F3; }
+    100% { box-shadow: 0 0 10px #2196F3; }
+  }
+  
+  /* Ripple for speaking */
+  @keyframes ripple-speaking {
+    0% {
+      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
+    }
+    70% {
+      box-shadow: 0 0 0 20px rgba(255, 193, 7, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
+    }
+  }
+  

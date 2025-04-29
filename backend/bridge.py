@@ -1,15 +1,15 @@
 import json
 import os
-import shutil
 
-def write_to_bubble(reply, path="../shared/spark_output.json"):
-    # Ensure the shared directory exists
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def write_status(status):
+    public_path = os.path.join(os.path.dirname(__file__), '..', 'public')
+    output_file = os.path.join(public_path, 'spark_output.json')
 
-    # Write the reply to the shared file
-    data = {"reply": reply}
-    with open(path, "w") as f:
+    os.makedirs(public_path, exist_ok=True)
+
+    data = {"status": status}
+
+    with open(output_file, "w") as f:
         json.dump(data, f)
 
-    # Copy to public folder for renderer.js to read
-    shutil.copy(path, "../public/spark_output.json")
+    print(f"[Bridge] Updated status to: {status}")

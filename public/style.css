@@ -1,6 +1,7 @@
 #bubble {
-    width: 75px;
-    height: 75px;
+    display: none; /* 🚨 Must be hidden */
+    width: 100px;
+    height: 100px;
     background: white;
     border-radius: 50%;
     margin: 50px auto;

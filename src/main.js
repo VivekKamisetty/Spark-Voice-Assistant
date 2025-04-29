@@ -1,18 +1,21 @@
 const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs'); // <-- 💥 IMPORTANT! you missed this
 
 let win;
 let sparkProcess = null;
+
+const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json'); // <-- You also missed defining this before using
 
 function createWindow() {
   const { screen } = require('electron');
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 300,   // <== make it 300
-    height: 300,  // <== make it 300
-    x: width - 340, // adjust slightly
+    width: 300,    // nice
+    height: 300,   // nice
+    x: width - 340, 
     y: 40,
     frame: false,
     transparent: true,
@@ -23,15 +26,18 @@ function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
     }
-});
-
-  
-  
-
+  });
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);
-  win.setIgnoreMouseEvents(true); // let clicks pass through the bubble
+  win.setIgnoreMouseEvents(true); // let clicks pass through
+}
+
+function resetSparkOutput() {
+  if (fs.existsSync(outputPath)) {
+    fs.unlinkSync(outputPath);
+    console.log('[Spark Main] 🧹 Old spark_output.json deleted.');
+  }
 }
 
 function startSparkBackend() {
@@ -55,14 +61,13 @@ function startSparkBackend() {
 }
 
 app.whenReady().then(() => {
+  resetSparkOutput();  // 🧹 very good!
   createWindow();
 
-  // Hotkey to refresh the bubble (keep this)
   globalShortcut.register('CommandOrControl+Shift+S', () => {
     win.reload();
   });
 
-  // 🚀 NEW: Hotkey to start Spark
   globalShortcut.register('Space', () => {
     console.log('[Spark Main] 🔥 Spacebar pressed!');
     startSparkBackend();

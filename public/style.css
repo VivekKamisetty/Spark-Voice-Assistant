@@ -1,12 +1,16 @@
 #bubble {
+    position: fixed;
+    top: -80px;         /* distance from the top */
+    right: 10px;       /* distance from the right */
     width: 75px;
     height: 75px;
-    background-color: white; /* <-- white base */
+    background-color: rgb(119, 99, 192); /* <-- white base */
     border-radius: 50%;
     margin: 100px auto;
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
     opacity: 0;
     transition: opacity 0.4s ease-in-out;
+    z-index: 9999;
   }
   
   /* Show the bubble only after status appears */

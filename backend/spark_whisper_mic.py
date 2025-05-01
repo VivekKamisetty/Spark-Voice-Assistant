@@ -124,7 +124,7 @@ def main():
             chat_history.append({"role": "user", "content": line})
 
             write_status("thinking")
-            reply = route_gpt_reply(line, chat_history)
+            reply = route_gpt_reply(line, chat_history, screenshot_enabled=True)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})

@@ -8,7 +8,7 @@ import sounddevice as sd
 import numpy as np
 import warnings
 
-from gpt_client import get_gpt_reply
+from gpt_client import route_gpt_reply
 from tts import speak
 from bridge import write_status
 from tts import speak
@@ -124,7 +124,7 @@ def main():
             chat_history.append({"role": "user", "content": line})
 
             write_status("thinking")
-            reply = get_gpt_reply(line, chat_history)
+            reply = route_gpt_reply(line, chat_history)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})

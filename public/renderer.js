@@ -14,10 +14,17 @@ function pollSparkStatus() {
     try {
       const json = JSON.parse(data);
       const status = json.status;
+      const showPopupFlag = json.show_popup;
+      const text = json.text || "";
 
       if (status !== lastStatus) {
         lastStatus = status;
         updateBubble(status);
+      }
+
+      // Show popup if instructed and there's text
+      if (showPopupFlag && text.trim().length > 0) {
+        showPopup(text);
       }
     } catch (error) {
       console.error('[Spark UI] Error parsing JSON:', error);
@@ -42,3 +49,34 @@ function updateBubble(status) {
 }
 
 setInterval(pollSparkStatus, 500);
+
+let popupTimeout = null;
+let lastPopupText = "";
+
+function showPopup(text) {
+  const popup = document.getElementById("spark-popup");
+  const popupText = document.getElementById("spark-popup-text");
+
+  if (text === lastPopupText) return; // 💡 Skip update if content hasn't changed
+  lastPopupText = text;
+
+  popupText.textContent = text;
+  popup.classList.remove("hidden");
+
+  popup.scrollTop = 0;
+
+  if (popupTimeout) clearTimeout(popupTimeout);
+  popupTimeout = setTimeout(() => {
+    popup.classList.add("hidden");
+    lastPopupText = ""; // reset tracker
+  }, 20000);
+}
+function closePopup() {
+  document.getElementById("spark-popup").classList.add("hidden");
+}
+
+function copyPopupText() {
+  const text = document.getElementById("spark-popup-text").innerText;
+  navigator.clipboard.writeText(text);
+}
+

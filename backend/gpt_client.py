@@ -12,7 +12,7 @@ def route_gpt_reply(prompt, chat_history, screenshot_enabled=False):
     visual_keywords = [
         "on my screen", "on screen", "this screen", "what's this error",
         "does this look", "what's wrong with this", "do these colors", "this ui",
-        "this code", "screenshot"
+        "this code", "screenshot", "on the screen", "screen", "docs", "Can you take a look"
     ]
     model = "gpt-3.5-turbo"
     requires_image = False
@@ -56,7 +56,7 @@ def route_gpt_reply(prompt, chat_history, screenshot_enabled=False):
             model=model,
             messages=messages
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content, model
     except Exception as e:
         print("OpenAI Error:", e)
         return "Sorry, there was a problem generating a response."

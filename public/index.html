@@ -7,6 +7,13 @@
 </head>
 <body>
   <div id="bubble"></div>
+  <div id="spark-popup" class="hidden">
+    <pre id="spark-popup-text"></pre>
+    <div style="margin-top: 8px;">
+      <button onclick="copyPopupText()">📋 Copy</button>
+      <button onclick="closePopup()">❌ Close</button>
+    </div>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>

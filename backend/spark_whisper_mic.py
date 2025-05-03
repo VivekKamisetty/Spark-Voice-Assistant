@@ -124,22 +124,24 @@ def main():
             chat_history.append({"role": "user", "content": line})
 
             write_status("thinking")
-            reply = route_gpt_reply(line, chat_history, screenshot_enabled=True)
+            reply, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
 
+            # Determine if popup should be shown
+            is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
+            show_popup = model_used == "gpt-4o" or is_multiline
 
-            write_status("speaking")  # show orange bubble
+            write_status("speaking", text=reply, show_popup=show_popup)
 
             mute_microphone()
             speak(reply)
-            delay = 0.75 # min(1.5, len(reply.split()) * 0.06)
-            time.sleep(delay)  # absorb audio tail from CoreAudio flush
+            delay = 0.75
+            time.sleep(delay)
             unmute_microphone()
-            
-            write_status("listening")  # back to green only *after* it's really silent
 
+            write_status("listening")
 
             if len(chat_history) > 20:
                 chat_history = chat_history[-18:]

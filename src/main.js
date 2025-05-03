@@ -30,7 +30,7 @@ function createWindow() {
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);
-  win.setIgnoreMouseEvents(true); // let clicks pass through
+  win.setIgnoreMouseEvents(false); // let clicks pass through
 }
 
 function resetSparkOutput() {

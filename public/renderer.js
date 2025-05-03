@@ -23,7 +23,7 @@ function pollSparkStatus() {
       }
 
       // Show popup if instructed and there's text
-      if (showPopupFlag && text.trim().length > 0) {
+      if (showPopupFlag && text.trim().length > 10) {
         showPopup(text);
       }
     } catch (error) {

@@ -67,7 +67,7 @@
     bottom: 40px;
     left: 40px;
     width: 520px;
-    max-height: 80vh;
+    max-height: 75vh;
   
     display: flex;
     flex-direction: column;
@@ -85,15 +85,35 @@
     z-index: 9999;
     pointer-events: auto;
     user-select: text;
-  
-    overflow-y: auto;         /* ← MAKE WHOLE CONTAINER SCROLLABLE */
-    box-sizing: border-box;
   }
   
   #spark-popup pre {
+    flex: 1;
     margin: 0;
     font-family: inherit;
     white-space: pre-wrap;
     word-break: break-word;
+    overflow-y: auto;
+    overflow-x: auto;
+    max-height: 60vh;
+  }
+  
+  #spark-popup.hidden {
+    display: none;
+  }
+  
+  #spark-popup button {
+    margin: 8px 8px 0 0;
+    background: rgba(255, 255, 255, 0.15);
+    color: white;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  
+  #spark-popup button:hover {
+    background: rgba(255, 255, 255, 0.3);
   }
   

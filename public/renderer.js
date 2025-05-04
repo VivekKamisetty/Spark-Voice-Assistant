@@ -56,24 +56,17 @@ let lastPopupText = "";
 function showPopup(text) {
   const popup = document.getElementById("spark-popup");
   const popupText = document.getElementById("spark-popup-text");
-
-  if (text === lastPopupText) return; // 💡 Skip update if content hasn't changed
-  lastPopupText = text;
-
-  popupText.textContent = text;
+  popupText.innerText = text;
   popup.classList.remove("hidden");
-
-  popup.scrollTop = 0;
-
-  if (popupTimeout) clearTimeout(popupTimeout);
-  popupTimeout = setTimeout(() => {
-    popup.classList.add("hidden");
-    lastPopupText = ""; // reset tracker
-  }, 20000);
+  popup.classList.add("show");   // Add this!
 }
+
 function closePopup() {
-  document.getElementById("spark-popup").classList.add("hidden");
+  const popup = document.getElementById("spark-popup");
+  popup.classList.remove("show");
+  popup.classList.add("hidden");
 }
+
 
 function copyPopupText() {
   const text = document.getElementById("spark-popup-text").innerText;

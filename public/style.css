@@ -66,10 +66,10 @@
     position: fixed;
     bottom: 40px;
     left: 40px;
-    width: 520px;
+    width: 540px;
     max-height: 75vh;
   
-    display: flex;
+    display: none; /* Prevent premature appearance */
     flex-direction: column;
   
     padding: 16px;
@@ -85,35 +85,25 @@
     z-index: 9999;
     pointer-events: auto;
     user-select: text;
+  
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  
+  #spark-popup.show {
+    display: flex;
   }
   
   #spark-popup pre {
     flex: 1;
     margin: 0;
     font-family: inherit;
-    white-space: pre-wrap;
+    white-space: pre; /* keep indentation */
     word-break: break-word;
-    overflow-y: auto;
+  
     overflow-x: auto;
+    overflow-y: auto;
     max-height: 60vh;
-  }
-  
-  #spark-popup.hidden {
-    display: none;
-  }
-  
-  #spark-popup button {
-    margin: 8px 8px 0 0;
-    background: rgba(255, 255, 255, 0.15);
-    color: white;
-    border: none;
-    padding: 6px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  
-  #spark-popup button:hover {
-    background: rgba(255, 255, 255, 0.3);
+    padding-right: 6px;
   }
   

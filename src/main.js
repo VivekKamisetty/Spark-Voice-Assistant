@@ -13,7 +13,7 @@ function createWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 300,    // nice
+    width: 600,    // nice
     height: 300,   // nice
     x: width - 340, 
     y: 40,
@@ -21,7 +21,7 @@ function createWindow() {
     transparent: true,
     focusable: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,

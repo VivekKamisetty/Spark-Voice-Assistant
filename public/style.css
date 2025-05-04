@@ -87,6 +87,10 @@
     max-width: 90vw;
     max-height: 80vw;
     overflow: auto;
+
+    resize: both;         /* 🔥 This makes the window resizable manually */
+    min-width: 300px;
+    min-height: 150px;
   }
   
   

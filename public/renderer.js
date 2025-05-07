@@ -59,10 +59,14 @@ function updateBubble(status) {
 
   if (status === 'listening') {
     bubble.classList.add('listening');
+    bubble.textContent = ' ';
   } else if (status === 'thinking') {
     bubble.classList.add('thinking');
   } else if (status === 'speaking') {
     bubble.classList.add('speaking');
+  } else if (status === 'calibrating') {
+    bubble.classList.add('thinking'); // reuse thinking animation
+    bubble.textContent = 'Calibrating...'; // temporary label
   }
 }
 

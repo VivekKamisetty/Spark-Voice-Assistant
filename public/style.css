@@ -11,6 +11,13 @@
     opacity: 0;
     transition: opacity 0.4s ease-in-out;
     z-index: 9999;
+    
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 11px;
+    text-align: center;
   }
   
   /* Show the bubble only after status appears */

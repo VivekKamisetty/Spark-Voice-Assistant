@@ -13,6 +13,29 @@ from tts import speak
 from bridge import write_status
 from tts import speak
 
+def calibrate_vad_threshold(duration=2.0):
+    print("[Spark] 🧪 Calibrating ambient noise...")
+    write_status("calibrating")
+    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+    sd.wait()
+    audio = audio.flatten()
+
+    max_amp = np.max(np.abs(audio))
+    avg_amp = np.mean(np.abs(audio))
+
+    print(f"[Spark] [Calib] Max Amp: {max_amp:.6f}, Avg Amp: {avg_amp:.6f}")
+
+    # Auto fallback if user is talking
+    if max_amp > 0.2:
+        print("[Spark] 🚨 Detected voice/spike during calibration. Using fallback threshold: 0.05")
+        return 0.05
+
+    # Hybrid threshold with safety floor
+    threshold = max(0.03, avg_amp + (max_amp - avg_amp) * 0.2)
+    print(f"[Spark] 🎯 Calibrated VAD threshold: {threshold:.4f}")
+    return threshold
+
+
 def run_speak(text):
     speak(text)
 
@@ -22,7 +45,8 @@ print = functools.partial(print, flush=True)
 model = whisper.load_model("small.en")
 sample_rate = 16000
 block_duration = 1.0
-vad_threshold = 0.09
+vad_threshold = calibrate_vad_threshold()
+write_status("listening")
 max_silence_time = 1.0
 
 q = queue.Queue()
@@ -67,7 +91,7 @@ def mic_listener(transcript_queue):
                 block = q.get()
                 block = block.flatten().astype(np.float32)
                 max_amplitude = np.max(np.abs(block))
-                print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
+                #print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
 
                 if max_amplitude > vad_threshold:
                     audio_data.append(block)

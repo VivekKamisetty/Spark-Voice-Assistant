@@ -22,7 +22,7 @@ print = functools.partial(print, flush=True)
 model = whisper.load_model("small.en")
 sample_rate = 16000
 block_duration = 1.0
-vad_threshold = 0.03
+vad_threshold = 0.09
 max_silence_time = 1.0
 
 q = queue.Queue()
@@ -67,7 +67,7 @@ def mic_listener(transcript_queue):
                 block = q.get()
                 block = block.flatten().astype(np.float32)
                 max_amplitude = np.max(np.abs(block))
-                #print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
+                print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
 
                 if max_amplitude > vad_threshold:
                     audio_data.append(block)

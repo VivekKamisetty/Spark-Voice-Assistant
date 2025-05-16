@@ -71,7 +71,7 @@
   
   #spark-popup {
     position: fixed;
-    left: 10px;
+    left: 200px;
     top: 100px;
     display: none;
     flex-direction: column;
@@ -87,15 +87,14 @@
     pointer-events: auto;
     user-select: text;
 
-    /* Initial size */
     width: 60vw;
     min-width: 300px;
     height: 50vh;
     min-height: 200px;
 
-    /* Make resizable */
     resize: both;
-    overflow: hidden; /* Important: hidden on container, auto on content */
+    overflow: hidden;
+    /* ❌ No dragging */
 }
 
 #spark-popup.show {
@@ -103,33 +102,32 @@
 }
 
 #popup-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  min-height: 0; /* ✅ critical to make flexbox calculate properly */
 }
 
 #spark-popup-text {
-    margin: 0;
-    padding: 0;
-    font-family: inherit;
-    white-space: pre-wrap;
-    word-break: break-word;
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: auto;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
 }
-
 #popup-footer {
-    position: sticky;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.6);
-    padding: 8px 0;
-    margin-top: 10px;
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 /* Button styles */
@@ -141,6 +139,7 @@
     color: white;
     cursor: pointer;
     transition: background-color 0.2s;
+    -webkit-app-region: no-drag;
 }
 
 #spark-popup button:hover {

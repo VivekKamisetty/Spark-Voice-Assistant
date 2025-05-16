@@ -46,7 +46,6 @@ model = whisper.load_model("small.en")
 sample_rate = 16000
 block_duration = 1.0
 vad_threshold = calibrate_vad_threshold()
-write_status("listening")
 max_silence_time = 1.0
 
 q = queue.Queue()

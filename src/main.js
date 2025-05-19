@@ -13,16 +13,19 @@ function createWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 600,    // nice
-    height: 300,   // nice
-    x: width, 
+    width: 600,
+    height: 300,
+    x: width - 640,   // ⬅ positions properly near right edge
     y: 40,
     frame: false,
     transparent: true,
-    movable: false,
-    focusable: false,
+    focusable: true,  // ✅ must be focusable to stay on top reliably
+    skipTaskbar: true,
     alwaysOnTop: true,
     resizable: true,
+    fullscreenable: false,        // ✅ for better macOS layering
+    hasShadow: false,
+    titleBarStyle: 'customButtonsOnHover',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -30,6 +33,8 @@ function createWindow() {
       enableBlinkFeatures: 'CSSBackdropFilter'
     }
   });
+  win.setAlwaysOnTop(true, 'floating', 1);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);

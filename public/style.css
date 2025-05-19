@@ -11,6 +11,13 @@
     opacity: 0;
     transition: opacity 0.4s ease-in-out;
     z-index: 9999;
+    
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 11px;
+    text-align: center;
   }
   
   /* Show the bubble only after status appears */
@@ -62,3 +69,92 @@
     }
   }
   
+  #spark-popup {
+    position: fixed;
+    left: 200px;
+    top: 100px;
+    display: none;
+    flex-direction: column;
+    padding: 16px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1.5;
+    z-index: 9999;
+    pointer-events: auto;
+    user-select: text;
+
+    width: 60vw;
+    min-width: 300px;
+    height: 50vh;
+    min-height: 200px;
+
+    resize: both;
+    overflow: hidden;
+    /* ❌ No dragging */
+}
+
+#spark-popup.show {
+    display: flex;
+}
+
+#popup-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  min-height: 0; /* ✅ critical to make flexbox calculate properly */
+}
+
+#spark-popup-text {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+#popup-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Button styles */
+#spark-popup button {
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: none;
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    -webkit-app-region: no-drag;
+}
+
+#spark-popup button:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Resize handle indicator */
+#spark-popup::after {
+    content: "";
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    width: 10px;
+    height: 10px;
+    border-right: 2px solid rgba(255, 255, 255, 0.7);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+    cursor: nwse-resize;
+}

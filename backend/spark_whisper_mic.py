@@ -8,10 +8,33 @@ import sounddevice as sd
 import numpy as np
 import warnings
 
-from gpt_client import get_gpt_reply
+from gpt_client import route_gpt_reply
 from tts import speak
 from bridge import write_status
 from tts import speak
+
+def calibrate_vad_threshold(duration=2.0):
+    print("[Spark] 🧪 Calibrating ambient noise...")
+    write_status("calibrating")
+    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+    sd.wait()
+    audio = audio.flatten()
+
+    max_amp = np.max(np.abs(audio))
+    avg_amp = np.mean(np.abs(audio))
+
+    print(f"[Spark] [Calib] Max Amp: {max_amp:.6f}, Avg Amp: {avg_amp:.6f}")
+
+    # Auto fallback if user is talking
+    if max_amp > 0.2:
+        print("[Spark] 🚨 Detected voice/spike during calibration. Using fallback threshold: 0.05")
+        return 0.05
+
+    # Hybrid threshold with safety floor
+    threshold = max(0.03, avg_amp + (max_amp - avg_amp) * 0.2)
+    print(f"[Spark] 🎯 Calibrated VAD threshold: {threshold:.4f}")
+    return threshold
+
 
 def run_speak(text):
     speak(text)
@@ -22,7 +45,7 @@ print = functools.partial(print, flush=True)
 model = whisper.load_model("small.en")
 sample_rate = 16000
 block_duration = 1.0
-vad_threshold = 0.03
+vad_threshold = calibrate_vad_threshold()
 max_silence_time = 1.0
 
 q = queue.Queue()
@@ -124,22 +147,24 @@ def main():
             chat_history.append({"role": "user", "content": line})
 
             write_status("thinking")
-            reply = get_gpt_reply(line, chat_history)
+            reply, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
 
+            # Determine if popup should be shown
+            is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
+            show_popup = model_used == "gpt-4o" or is_multiline
 
-            write_status("speaking")  # show orange bubble
+            write_status("speaking", text=reply, show_popup=show_popup)
 
             mute_microphone()
             speak(reply)
-            delay = 0.75 # min(1.5, len(reply.split()) * 0.06)
-            time.sleep(delay)  # absorb audio tail from CoreAudio flush
+            delay = 0.75
+            time.sleep(delay)
             unmute_microphone()
-            
-            write_status("listening")  # back to green only *after* it's really silent
 
+            write_status("listening")
 
             if len(chat_history) > 20:
                 chat_history = chat_history[-18:]

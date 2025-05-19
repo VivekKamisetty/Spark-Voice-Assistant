@@ -13,24 +13,27 @@ function createWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 300,    // nice
+    width: 600,    // nice
     height: 300,   // nice
-    x: width - 340, 
+    x: width, 
     y: 40,
     frame: false,
     transparent: true,
+    movable: false,
     focusable: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      backgroundThrottling: false,
+      enableBlinkFeatures: 'CSSBackdropFilter'
     }
   });
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);
-  win.setIgnoreMouseEvents(true); // let clicks pass through
+  win.setIgnoreMouseEvents(false); // let clicks pass through
 }
 
 function resetSparkOutput() {

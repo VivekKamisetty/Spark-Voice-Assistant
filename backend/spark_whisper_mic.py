@@ -78,7 +78,7 @@ def calibrate_vad_threshold(duration=2.0):
         return 0.05
 
     # Hybrid threshold with safety floor
-    threshold = (avg_amp + (max_amp - avg_amp) * 0.2) + 0.00
+    threshold = max(0.03, avg_amp + (max_amp - avg_amp) * 0.2)
     print(f"[Spark] 🎯 Calibrated VAD threshold: {threshold:.4f}")
     return threshold
 

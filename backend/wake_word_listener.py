@@ -9,10 +9,9 @@ from dotenv import load_dotenv
 from backend_controller import start_backend, is_backend_running
 from bridge import write_status
 
-def wake_word_listener():
+def wake_word_listener(on_trigger=None):
     load_dotenv()
     ACCESS_KEY = os.getenv("PICOVOICE_API_KEY")
-
     print("[WakeWord] 🔁 Starting wake-word loop")
 
     while True:
@@ -47,13 +46,16 @@ def wake_word_listener():
                         print("[WakeWord] 🗣️ 'Hey Siri' detected!")
                         write_status("calibrating")
                         start_backend()
-
-                        # Wait for backend to finish
+                    
+                        if callable(on_trigger):
+                            on_trigger()  # 🚀 Triggers frontend (Electron) from run_spark.py
+                    
                         while is_backend_running():
                             time.sleep(1)
-
+                    
                         print("[WakeWord] ✅ Backend stopped, resuming wake-word detection.")
-                        break  # Exit the inner stream loop and restart Porcupine fresh
+                        break
+
 
         except Exception as e:
             print(f"[WakeWord] ❌ Error in wake listener: {e}")

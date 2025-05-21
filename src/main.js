@@ -72,14 +72,14 @@ app.whenReady().then(() => {
   resetSparkOutput();  // 🧹 very good!
   createWindow();
 
-  globalShortcut.register('CommandOrControl+Shift+S', () => {
-    win.reload();
-  });
+  // globalShortcut.register('CommandOrControl+Shift+S', () => {
+  //   win.reload();
+  // });
 
-  globalShortcut.register('Space', () => {
-    console.log('[Spark Main] 🔥 Spacebar pressed!');
-    startSparkBackend();
-  });
+  // globalShortcut.register('Space', () => {
+  //   console.log('[Spark Main] 🔥 Spacebar pressed!');
+  //   startSparkBackend();
+  // });
 });
 
 app.on('will-quit', () => {

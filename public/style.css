@@ -91,13 +91,14 @@
   z-index: 9999;
   pointer-events: auto;
   user-select: text;
-  max-width: 700px;
+  max-width: 375px;
   margin: 0 auto;
 
   width: 60vw;
   min-width: 300px;
   height: 50vh;
   min-height: 200px;
+  max-height: 476px;
 
   resize: none;
   overflow: hidden;
@@ -159,11 +160,11 @@ position: absolute;
 bottom: 0;
 left: 0;
 right: 0;
-background-color: rgba(0, 0, 0, 0.6);
+background-color: rgba(30, 30, 30, 0.9);
 padding: 8px;
 display: flex;
 justify-content: flex-end;
-border-top: 1px solid rgba(255, 255, 255, 0.1);
+border-top: 1px solid rgba(30, 30, 30, 0.9);
 gap: 10px;
 flex-shrink: 0;
 z-index: 10;

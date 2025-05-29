@@ -14,7 +14,7 @@ function createWindow() {
 
   win = new BrowserWindow({
     width: 600,
-    height: 300,
+    height: 400,
     x: width - 640,   // ⬅ positions properly near right edge
     y: 40,
     frame: false,
@@ -22,7 +22,7 @@ function createWindow() {
     focusable: true,  // ✅ must be focusable to stay on top reliably
     skipTaskbar: true,
     alwaysOnTop: true,
-    resizable: true,
+    resizable: false,
     fullscreenable: false,        // ✅ for better macOS layering
     hasShadow: false,
     titleBarStyle: 'customButtonsOnHover',
@@ -38,13 +38,36 @@ function createWindow() {
 
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);
-  win.setIgnoreMouseEvents(false); // let clicks pass through
+
+win.on('ready-to-show', () => {
+  win.setIgnoreMouseEvents(true, { forward: true });
+})
 }
 
+ipcMain.on('resize-window', (event, { width, height }) => {
+  if (win) {
+    win.setSize(Math.round(width), Math.round(height));
+  }
+});
+
+ipcMain.on('set-mouse-events', (event, interactive) => {
+  if (win) {
+    win.setIgnoreMouseEvents(!interactive, { forward: true });
+  }
+});
+
+
 function resetSparkOutput() {
-  if (fs.existsSync(outputPath)) {
-    fs.unlinkSync(outputPath);
-    console.log('[Spark Main] 🧹 Old spark_output.json deleted.');
+  const defaultData = {
+    status: "idle",
+    show_popup: false,
+    text: ""
+  };
+  try {
+    fs.writeFileSync(outputPath, JSON.stringify(defaultData, null, 2));
+    console.log('[Spark Main] 🧹 Reset spark_output.json with defaults.');
+  } catch (e) {
+    console.error('[Spark Main] Failed to reset:', e);
   }
 }
 
@@ -85,3 +108,4 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
+

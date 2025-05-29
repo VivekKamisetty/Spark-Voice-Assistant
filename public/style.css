@@ -1,210 +1,245 @@
 #bubble {
-    position: fixed;
-    top: -80px;         /* distance from the top */
-    right: 10px;       /* distance from the right */
-    width: 75px;
-    height: 75px;
-    background-color: rgb(119, 99, 192); /* <-- white base */
-    border-radius: 50%;
-    margin: 100px auto;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
-    opacity: 0;
-    transition: opacity 0.4s ease-in-out;
-    z-index: 9999;
-    
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-size: 11px;
-    text-align: center;
-  }
+  -webkit-app-region: no-drag;
+  position: fixed;
+  top: -80px;         /* distance from the top */
+  right: 10px;       /* distance from the right */
+  width: 75px;
+  height: 75px;
+  background-color: rgb(119, 99, 192); /* <-- white base */
+  border-radius: 50%;
+  margin: 100px auto;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  transition: opacity 0.4s ease-in-out;
+  z-index: 9999;
   
-  /* Show the bubble only after status appears */
-  #bubble.show {
-    opacity: 1;
-  }
-  
-  /* Listening status: green pulse */
-  .listening {
-    background-color: #4CAF50;
-    animation: pulse-listening 2s infinite;
-  }
-  
-  /* Thinking status: blue pulse */
-  .thinking {
-    background-color: #2196F3;
-    animation: pulse-thinking 1.5s infinite;
-  }
-  
-  /* Speaking status: yellow ripple */
-  .speaking {
-    background-color: #FFC107;
-    animation: ripple-speaking 2s infinite;
-  }
-  
-  /* Pulse animations */
-  @keyframes pulse-listening {
-    0% { box-shadow: 0 0 10px #4CAF50; }
-    50% { box-shadow: 0 0 30px #4CAF50; }
-    100% { box-shadow: 0 0 10px #4CAF50; }
-  }
-  
-  @keyframes pulse-thinking {
-    0% { box-shadow: 0 0 10px #2196F3; }
-    50% { box-shadow: 0 0 25px #2196F3; }
-    100% { box-shadow: 0 0 10px #2196F3; }
-  }
-  
-  /* Ripple for speaking */
-  @keyframes ripple-speaking {
-    0% {
-      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
-    }
-    70% {
-      box-shadow: 0 0 0 20px rgba(255, 193, 7, 0);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
-    }
-  }
-  
-  #spark-popup {
-    position: fixed;
-    left: 200px;
-    top: 100px;
-    display: none;
-    flex-direction: column;
-    padding: 16px;
-    border-radius: 12px;
-    background: rgba(30, 30, 30, 0.9);
-    backdrop-filter: blur(12px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-    color: #fff;
-    font-size: 14px;
-    line-height: 1.5;
-    z-index: 9999;
-    pointer-events: auto;
-    user-select: text;
-    max-width: 700px;
-    margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 11px;
+  text-align: center;
+  pointer-events: auto;
+}
 
-    width: 60vw;
-    min-width: 300px;
-    height: 50vh;
-    min-height: 200px;
+/* Show the bubble only after status appears */
+#bubble.show {
+  opacity: 1;
+}
 
-    resize: both;
-    overflow: auto;
-    /* ❌ No dragging */
+/* Listening status: green pulse */
+.listening {
+  background-color: #4CAF50;
+  animation: pulse-listening 2s infinite;
+}
+
+/* Thinking status: blue pulse */
+.thinking {
+  background-color: #2196F3;
+  animation: pulse-thinking 1.5s infinite;
+}
+
+/* Speaking status: yellow ripple */
+.speaking {
+  background-color: #FFC107;
+  animation: ripple-speaking 2s infinite;
+}
+
+/* Pulse animations */
+@keyframes pulse-listening {
+  0% { box-shadow: 0 0 10px #4CAF50; }
+  50% { box-shadow: 0 0 30px #4CAF50; }
+  100% { box-shadow: 0 0 10px #4CAF50; }
+}
+
+@keyframes pulse-thinking {
+  0% { box-shadow: 0 0 10px #2196F3; }
+  50% { box-shadow: 0 0 25px #2196F3; }
+  100% { box-shadow: 0 0 10px #2196F3; }
+}
+
+/* Ripple for speaking */
+@keyframes ripple-speaking {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 20px rgba(255, 193, 7, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
+  }
+}
+
+#spark-popup {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  flex-direction: column;
+  display: flex;
+  left: 200px;
+  top: 100px;
+  display: none;
+  flex-direction: column;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(30, 30, 30, 0.9);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.5;
+  z-index: 9999;
+  pointer-events: auto;
+  user-select: text;
+  max-width: 700px;
+  margin: 0 auto;
+
+  width: 60vw;
+  min-width: 300px;
+  height: 50vh;
+  min-height: 200px;
+
+  resize: none;
+  overflow: hidden;
+  
+  /* ❌ No dragging */
 }
 
 #spark-popup.show {
-    display: flex;
+  display: flex;
 }
 
 #popup-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  min-height: 0; /* ✅ critical to make flexbox calculate properly */
+flex: 1;
+display: flex;
+position: relative;
+flex-direction: column;
+height: 100%;
+/*overflow-y: auto;*/
+overflow: hidden;
+min-height: 0; /* ✅ critical to make flexbox calculate properly */
 }
 
 #spark-popup-text {
-  padding: 20px;
-  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-  font-size: 15px;
-  color: #f1f1f1;
-  line-height: 1.6;
-  overflow-y: auto;
-  max-height: 70vh;
-  white-space: normal;
+flex: 1;
+padding: 16px;
+overflow-y: auto;
+font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+font-size: 15px;
+color: #f1f1f1;
+line-height: 1.6;
+overflow-y: auto;
+max-height: none;
+white-space: normal;
+padding-bottom: 48px;
 }
 
 #spark-popup-text code {
-  background: #2e2e2e;
-  color: #ffae00;
-  padding: 2px 4px;
-  border-radius: 4px;
-  font-family: 'Fira Code', monospace;
+background: #2e2e2e;
+color: #ffae00;
+padding: 2px 4px;
+border-radius: 4px;
+font-family: 'Fira Code', monospace;
 }
 
 /* Code blocks */
 #spark-popup-text pre {
-  background-color: #2c2c2c;  /* Slightly lighter */
-  border: 1px solid #444;
-  color: #d4d4d4;
-  border-radius: 6px;
-  padding: 12px;
-  overflow-x: auto;
-  font-family: 'Fira Code', monospace;
-  font-size: 14px;
+background-color: #2c2c2c;  /* Slightly lighter */
+border: 1px solid #444;
+color: #d4d4d4;
+border-radius: 6px;
+padding: 12px;
+overflow-x: auto;
+font-family: 'Fira Code', monospace;
+font-size: 14px;
 }
 
 #popup-footer {
-  position: sticky;
-  bottom: 8px;
-  background-color: rgba(0, 0, 0, 0.6);
-  padding: 8px 0;
-  margin-top: 10px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+position: absolute;
+bottom: 0;
+left: 0;
+right: 0;
+background-color: rgba(0, 0, 0, 0.6);
+padding: 8px;
+display: flex;
+justify-content: flex-end;
+border-top: 1px solid rgba(255, 255, 255, 0.1);
+gap: 10px;
+flex-shrink: 0;
+z-index: 10;
 }
 
 /* Button styles */
 #spark-popup button {
-    padding: 6px 12px;
-    border-radius: 4px;
-    border: none;
-    background-color: rgba(255, 255, 255, 0.2);
-    color: white;
-    cursor: pointer;
-    transition: background-color 0.2s;
-    -webkit-app-region: no-drag;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: none;
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  -webkit-app-region: no-drag;
 }
 
 #spark-popup button:hover {
-    background-color: rgba(255, 255, 255, 0.3);
+  background-color: rgba(255, 255, 255, 0.3);
 }
 
 /* Resize handle indicator */
 #spark-popup::after {
-    content: "";
-    position: absolute;
-    bottom: 3px;
-    right: 3px;
-    width: 10px;
-    height: 10px;
-    border-right: 2px solid rgba(255, 255, 255, 0.7);
-    border-bottom: 2px solid rgba(255, 255, 255, 0.7);
-    cursor: nwse-resize;
+content: "";
+position: absolute;
+bottom: 3px;
+right: 3px;
+width: 16px;
+height: 16px;
+pointer-events: none;
+background: rgba(255, 255, 255, 0.3);  /* ✅ visible */
+border-radius: 3px;
+cursor: nwse-resize;
+z-index: 10000; /* Ensure it’s on top */
+}
+
+html, body {
+margin: 0;
+padding: 0;
+overflow: hidden; /* prevent entire window scrolling */
+height: 100%;
+}
+
+#popup-resize-grip {
+position: absolute;
+width: 20px;
+height: 20px;
+bottom: 0;
+right: 0;
+background: rgba(255, 255, 255, 0.5);
+cursor: nwse-resize;
+z-index: 100; /* Above ::after */
 }
 
 
 /* Add to your style.css */
 .hljs {
-  background: #1e1e1e;
-  color: #e0e0e0;
-  padding: 12px;
-  border-radius: 8px;
-  overflow-x: auto;
+background: #1e1e1e;
+color: #e0e0e0;
+padding: 12px;
+border-radius: 8px;
+overflow-x: auto;
 }
 .hljs-comment,
 .hljs-quote {
-  color: #999;
-  font-style: italic;
+color: #999;
+font-style: italic;
 }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-subst {
-  color: #ffae00;
+color: #ffae00;
 }
 .hljs-string,
 .hljs-number,
 .hljs-built_in,
 .hljs-literal {
-  color: #00d8ff;
+color: #00d8ff;
 }

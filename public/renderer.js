@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { marked } = require("marked");
 const hljs = require("highlight.js");
+const { ipcRenderer } = require('electron');
+
+
 
 const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json');
 let lastStatus = "";
@@ -75,17 +78,16 @@ function showPopup(text) {
   const popup = document.getElementById("spark-popup");
   const popupText = document.getElementById("spark-popup-text");
 
-  // Apply saved dimensions
+  // Set dimensions
   if (popupSettings.width) popup.style.width = popupSettings.width;
   if (popupSettings.height) popup.style.height = popupSettings.height;
   if (popupSettings.left) popup.style.left = popupSettings.left;
   if (popupSettings.top) popup.style.top = popupSettings.top;
 
-  // Convert Markdown to HTML with highlight
   popupText.innerHTML = marked.parse(text);
-
   popup.classList.remove("hidden");
   popup.classList.add("show");
+
 }
 
 // --- Close Popup ---
@@ -94,10 +96,11 @@ function closePopup() {
   savePopupDimensions();
   popup.classList.remove("show");
   popup.classList.add("hidden");
+
 }
 
 // --- Copy Button ---
-function copyPopupText() {
+function copyPopupText(event) {
   const text = document.getElementById("spark-popup-text").innerText;
   navigator.clipboard.writeText(text).then(() => {
     const btn = event.target;
@@ -128,6 +131,9 @@ function savePopupDimensions() {
 // --- ResizeObserver Setup ---
 document.addEventListener('DOMContentLoaded', () => {
   const popup = document.getElementById("spark-popup");
+  const grip = document.getElementById("popup-resize-grip");
+
+  // Save size on change
   const resizeObserver = new ResizeObserver(entries => {
     for (let entry of entries) {
       if (entry.target === popup) {
@@ -136,7 +142,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   resizeObserver.observe(popup);
+
+  document.addEventListener('mousemove', (e) => {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const interactive = el && (el.closest('#spark-popup') || el.closest('#bubble'));
+    ipcRenderer.send('set-mouse-events', interactive);
+  });
+
+  // Only grip triggers resize
+  grip.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const rect = popup.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startWidth = rect.width;
+    const startHeight = rect.height;
+  
+    function onMouseMove(ev) {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const newWidth = startWidth + dx;
+      const newHeight = startHeight + dy;
+  
+      // Resize the DOM popup
+      popup.style.width = `${newWidth}px`;
+      popup.style.height = `${newHeight}px`;
+  
+      // Tell Electron to resize the actual window
+      //ipcRenderer.send('resize-window', { width: newWidth, height: newHeight});
+    }
+  
+    function onMouseUp() {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    }
+  
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  });
 });
+
 
 // --- Start Polling ---
 setInterval(pollSparkStatus, 500);

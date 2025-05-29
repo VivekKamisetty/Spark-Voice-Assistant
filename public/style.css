@@ -91,14 +91,14 @@
   z-index: 9999;
   pointer-events: auto;
   user-select: text;
-  max-width: 375px;
+  max-width: 365px;
   margin: 0 auto;
 
   width: 60vw;
   min-width: 300px;
   height: 50vh;
   min-height: 200px;
-  max-height: 476px;
+  max-height: 465px;
 
   resize: none;
   overflow: hidden;

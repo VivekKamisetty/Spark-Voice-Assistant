@@ -31,7 +31,7 @@ def calibrate_vad_threshold(duration=2.0):
         return 0.05
 
     # Hybrid threshold with safety floor
-    threshold = max(0.03, avg_amp + (max_amp - avg_amp) * 0.2)
+    threshold = avg_amp + (max_amp - avg_amp) * 0.2
     print(f"[Spark] 🎯 Calibrated VAD threshold: {threshold:.4f}")
     return threshold
 
@@ -137,12 +137,26 @@ def main():
     while True:
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
+            words = line.lower().split()
 
-            if len(line.split()) <= 1:
-                print(f"[Spark] Ignored too-short input: '{line}'")
+            # ✅ Ignore very short prompts
+            if len(words) <= 2:
+                print(f"[Spark] ⏭️ Ignored short prompt: '{line}'")
                 write_status("listening")
                 continue
 
+            # ✅ Ignore polite phrases
+            polite_phrases = {
+                "thank you", "thanks", "i'm sorry", "sorry", "ok", "okay", "cool", "yep", "yes", "no", "all right"
+            }
+
+            normalized_line = line.lower().strip()
+            if normalized_line in polite_phrases:
+                print(f"[Spark] 🙏 Ignored polite-only phrase: '{line}'")
+                write_status("listening")
+                continue
+
+            # ✅ Process prompt
             print(f"[Spark] [User] {line}")
             chat_history.append({"role": "user", "content": line})
 
@@ -152,7 +166,6 @@ def main():
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
 
-            # Determine if popup should be shown
             is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
             show_popup = model_used == "gpt-4o" or is_multiline
 
@@ -160,8 +173,7 @@ def main():
 
             mute_microphone()
             speak(reply)
-            delay = 0.75
-            time.sleep(delay)
+            time.sleep(0.75)
             unmute_microphone()
 
             write_status("listening")
@@ -170,6 +182,7 @@ def main():
                 chat_history = chat_history[-18:]
         else:
             time.sleep(0.1)
+
 
 if __name__ == "__main__":
     main()

@@ -7,11 +7,58 @@ import whisper
 import sounddevice as sd
 import numpy as np
 import warnings
+import os
+import signal
+import sys
+import atexit
+
 
 from gpt_client import route_gpt_reply
 from tts import speak
 from bridge import write_status
-from tts import speak
+import signal
+
+def handle_exit_signal(signum, frame):
+    cleanup_before_exit()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_exit_signal)
+signal.signal(signal.SIGINT, handle_exit_signal)
+
+
+idle_timer = None
+
+def start_idle_timer(timeout=15):
+    global idle_timer
+
+    if idle_timer:
+        idle_timer.cancel()
+        idle_timer = None
+
+    def shutdown():
+        print("[Spark] 💤 No input received — entering idle.")
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    idle_timer = threading.Timer(timeout, shutdown)
+    idle_timer.daemon = True
+    idle_timer.start()
+
+def cancel_idle_timer():
+    global idle_timer
+    if idle_timer:
+        print("[Spark] 🔄 Cancelling idle shutdown.")
+        idle_timer.cancel()
+        idle_timer = None
+
+def cleanup_before_exit():
+    print("[Spark] 🧼 Cleaning up before shutdown...")
+    try:
+        unmute_microphone()
+    except Exception as e:
+        print(f"[Spark] ⚠️ Failed to unmute: {e}")
+    write_status("inactive")
+
+atexit.register(cleanup_before_exit)
 
 def calibrate_vad_threshold(duration=2.0):
     print("[Spark] 🧪 Calibrating ambient noise...")
@@ -31,7 +78,7 @@ def calibrate_vad_threshold(duration=2.0):
         return 0.05
 
     # Hybrid threshold with safety floor
-    threshold = avg_amp + (max_amp - avg_amp) * 0.2
+    threshold = max(0.03, avg_amp + (max_amp - avg_amp) * 0.2)
     print(f"[Spark] 🎯 Calibrated VAD threshold: {threshold:.4f}")
     return threshold
 
@@ -125,6 +172,18 @@ def mic_listener(transcript_queue):
             else:
                 print("[Whisper] No valid text transcribed.")
 
+def schedule_idle_shutdown(timeout=10):
+    def shutdown():
+        print("[Spark] 💤 No input received — entering idle.")
+        from backend_controller import stop_backend
+        stop_backend()
+        from bridge import write_status
+        write_status("inactive")
+
+    idle_timer = threading.Timer(timeout, shutdown)
+    idle_timer.daemon = True
+    idle_timer.start()
+
 def main():
     print("[Spark] Starting up with VAD and hotkeys...")
     unmute_microphone()
@@ -161,6 +220,7 @@ def main():
             chat_history.append({"role": "user", "content": line})
 
             write_status("thinking")
+            cancel_idle_timer()
             reply, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
 
             print(f"[Spark] [GPT] {reply}")
@@ -175,6 +235,7 @@ def main():
             speak(reply)
             time.sleep(0.75)
             unmute_microphone()
+            start_idle_timer(15)
 
             write_status("listening")
 

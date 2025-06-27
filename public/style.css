@@ -72,38 +72,27 @@
 }
 
 #spark-popup {
-  -webkit-app-region: no-drag;
+  display: none; 
   position: fixed;
-  flex-direction: column;
+  top: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 550px;
+  max-height: 550px; /*calc(100vh - 120px); /* Sets a max size that respects the top offset */
+
+  /* Flexbox Layout */
   display: flex;
-  left: 200px;
-  top: 100px;
-  display: none;
   flex-direction: column;
-  padding: 16px;
-  border-radius: 12px;
+
+  /* Visuals & Spacing */
   background: rgba(30, 30, 30, 0.9);
   backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  border-radius: 12px;
+  padding: 16px;
   color: #fff;
-  font-size: 14px;
-  line-height: 1.5;
-  z-index: 9999;
-  pointer-events: auto;
-  user-select: text;
-  max-width: 365px;
-  margin: 0 auto;
-
-  width: 60vw;
-  min-width: 300px;
-  height: 50vh;
-  min-height: 200px;
-  max-height: 465px;
-
-  resize: none;
   overflow: hidden;
-  
-  /* ❌ No dragging */
+  z-index: 10000;
 }
 
 #spark-popup.show {
@@ -111,36 +100,30 @@
 }
 
 #popup-content {
-flex: 1;
-display: flex;
-position: relative;
-flex-direction: column;
-height: 100%;
-/*overflow-y: auto;*/
-overflow: hidden;
-min-height: 0; /* ✅ critical to make flexbox calculate properly */
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1; /* This is the key property to make it fill the parent */
+  min-height: 0; /* Prevents flexbox from overflowing */
 }
 
 #spark-popup-text {
-flex: 1;
-padding: 16px;
-overflow-y: auto;
-font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-font-size: 15px;
-color: #f1f1f1;
-line-height: 1.6;
-overflow-y: auto;
-max-height: none;
-white-space: normal;
-padding-bottom: 48px;
+  flex-grow: 1; /* This is key: allows the text area to take all available space */
+  overflow-y: auto; /* Makes ONLY the text area scrollable if content overflows */
+  padding: 16px; /* Use regular padding all around */
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  font-size: 15px;
+  color: #f1f1f1;
+  line-height: 1.6;
+  white-space: normal;
 }
 
 #spark-popup-text code {
 background: #2e2e2e;
 color: #ffae00;
-padding: 2px 4px;
-border-radius: 4px;
+padding: 2px 5px;
+border-radius: 5px;
 font-family: 'Fira Code', monospace;
+font-size: 13px;
 }
 
 /* Code blocks */
@@ -153,21 +136,18 @@ padding: 12px;
 overflow-x: auto;
 font-family: 'Fira Code', monospace;
 font-size: 14px;
+white-space: pre-wrap;       /* Allows wrapping long lines */
+word-break: break-word;      /* Ensures long words don’t overflow */
 }
 
 #popup-footer {
-position: absolute;
-bottom: 0;
-left: 0;
-right: 0;
-background-color: rgba(30, 30, 30, 0.9);
-padding: 8px;
-display: flex;
-justify-content: flex-end;
-border-top: 1px solid rgba(30, 30, 30, 0.9);
-gap: 10px;
-flex-shrink: 0;
-z-index: 10;
+  /* Remove absolute positioning and use flex properties instead */
+  flex-shrink: 0; /* Prevents the footer from shrinking */
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid #444; /* A subtle separator line */
 }
 
 /* Button styles */
@@ -186,39 +166,47 @@ z-index: 10;
   background-color: rgba(255, 255, 255, 0.3);
 }
 
-/* Resize handle indicator */
-#spark-popup::after {
-content: "";
-position: absolute;
-bottom: 3px;
-right: 3px;
-width: 16px;
-height: 16px;
-pointer-events: none;
-background: rgba(255, 255, 255, 0.3);  /* ✅ visible */
-border-radius: 3px;
-cursor: nwse-resize;
-z-index: 10000; /* Ensure it’s on top */
+
+html {
+  box-sizing: border-box;
+}
+*, *:before, *:after {
+  box-sizing: inherit;
 }
 
 html, body {
-margin: 0;
-padding: 0;
-overflow: hidden; /* prevent entire window scrolling */
-height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
 }
 
 #popup-resize-grip {
-position: absolute;
-width: 20px;
-height: 20px;
-bottom: 0;
-right: 0;
-background: rgba(255, 255, 255, 0.5);
-cursor: nwse-resize;
-z-index: 100; /* Above ::after */
+  /* Positioning */
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  bottom: 0;
+  right: 0;
+  z-index: 100;
+
+  /* Appearance & Interaction */
+  cursor: nwse-resize; /* Sets the diagonal resize cursor */
+  pointer-events: auto; /* Ensures the grip can be clicked and dragged */
 }
 
+/* Optional: Add a visual indicator inside the grip */
+#popup-resize-grip::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.5);
+  border-right: 2px solid rgba(255, 255, 255, 0.5);
+}
 
 /* Add to your style.css */
 .hljs {

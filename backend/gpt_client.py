@@ -4,6 +4,8 @@ import tempfile
 import subprocess
 from openai import OpenAI
 from dotenv import load_dotenv
+from agent_system.intent_handler import handle_intent
+import json
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -111,8 +113,30 @@ def route_gpt_reply(prompt, chat_history, screenshot_enabled=False):
             model=model,
             messages=messages
         )
-        return response.choices[0].message.content, model
+        response_text = response.choices[0].message.content
+        agent_result = try_handle_agent(response_text)
+        
+        return {
+            "reply": response_text,
+            "agent_result": agent_result or {"status": "no_action"}
+        }, model
 
     except Exception as e:
         print("OpenAI Error:", e)
         return "Sorry, there was a problem generating a response.", model
+
+def try_handle_agent(response_text):
+    try:
+        start = response_text.find("{")
+        end = response_text.rfind("}") + 1
+        json_part = response_text[start:end]
+        parsed = json.loads(json_part)
+
+        if isinstance(parsed, dict) and "agent" in parsed:
+            print("[SAS] Agent command detected. Executing...")
+            result = handle_intent(parsed)
+            print("[SAS] Result:", result)
+            return result
+    except Exception as e:
+        print("[SAS] No valid agent payload found:", e)
+        return None

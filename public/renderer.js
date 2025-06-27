@@ -77,17 +77,24 @@ function updateBubble(status) {
 function showPopup(text) {
   const popup = document.getElementById("spark-popup");
   const popupText = document.getElementById("spark-popup-text");
+  const bubble = document.getElementById('bubble');
 
-  // Set dimensions
+  // DYNAMIC POSITIONING LOGIC
+  const bubbleRect = bubble.getBoundingClientRect(); 
+  const popupTop = bubbleRect.bottom + 15; // 15px margin
+  popup.style.top = `${popupTop}px`; // Set top position dynamically
+
+  // Restore saved dimensions (but not top)
   if (popupSettings.width) popup.style.width = popupSettings.width;
   if (popupSettings.height) popup.style.height = popupSettings.height;
-  if (popupSettings.left) popup.style.left = popupSettings.left;
-  if (popupSettings.top) popup.style.top = popupSettings.top;
-
+  if (popupSettings.left) {
+      popup.style.left = popupSettings.left;
+  }
+  
+  // Show the popup
   popupText.innerHTML = marked.parse(text);
-  popup.classList.remove("hidden");
+  popup.classList.remove("hidden"); // This might be redundant now, but safe
   popup.classList.add("show");
-
 }
 
 // --- Close Popup ---
@@ -149,9 +156,19 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.send('set-mouse-events', interactive);
   });
 
+  document.getElementById('spark-close-button').addEventListener('click', () => {
+    closePopup(); // Call your existing closePopup function
+  });
+
+  document.getElementById('spark-copy-button').addEventListener('click', (event) => {
+    copyPopupText(event);
+  });
+
   // Only grip triggers resize
   grip.addEventListener('mousedown', (e) => {
     e.preventDefault();
+    const popup = document.getElementById("spark-popup");
+    popup.style.maxHeight = 'none';
     const rect = popup.getBoundingClientRect();
     const startX = e.clientX;
     const startY = e.clientY;

@@ -221,18 +221,20 @@ def main():
 
             write_status("thinking")
             cancel_idle_timer()
-            reply, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
+            response_dict, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
+            reply_text = response_dict["reply"]
+            agent_result = response_dict.get("agent_result", {"status": "no_action"})
 
-            print(f"[Spark] [GPT] {reply}")
-            chat_history.append({"role": "assistant", "content": reply})
+            print(f"[Spark] [GPT] {reply_text}")
+            chat_history.append({"role": "assistant", "content": reply_text})
 
-            is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
+            is_multiline = reply_text.count("\\n") >= 3 or len(reply_text.splitlines()) >= 3
             show_popup = model_used == "gpt-4o" or is_multiline
 
-            write_status("speaking", text=reply, show_popup=show_popup)
+            write_status("speaking", text=reply_text, show_popup=show_popup, agent_result=agent_result)
 
             mute_microphone()
-            speak(reply)
+            speak(reply_text)
             time.sleep(0.75)
             unmute_microphone()
             start_idle_timer(15)

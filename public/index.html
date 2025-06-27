@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>Spark</title>
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/monokai-sublime.min.css">
 </head>
 <body>
   <div id="bubble"></div>
@@ -12,8 +12,8 @@
     <div id="popup-content">
       <pre id="spark-popup-text"></pre>
       <div id="popup-footer">
-        <button onclick="copyPopupText(event)">Copy</button>
-        <button onclick="closePopup()">❌ Close</button>
+        <button id="spark-copy-button">Copy</button>
+        <button id="spark-close-button">❌ Close</button>
       </div>
     </div>
     <div id="popup-resize-grip"></div>

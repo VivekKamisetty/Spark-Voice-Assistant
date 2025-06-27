@@ -13,9 +13,9 @@ function createWindow() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 600,
-    height: 600,
-    x: width - 640,   // ⬅ positions properly near right edge
+    width: 520,
+    height: 650,
+    x: width - 520 - 40,   // ⬅ positions properly near right edge
     y: 40,
     frame: false,
     transparent: true,

@@ -39,9 +39,9 @@ function createWindow() {
   const indexPath = path.join(__dirname, '../public/index.html');
   win.loadFile(indexPath);
 
-win.on('ready-to-show', () => {
-  win.setIgnoreMouseEvents(true, { forward: true });
-})
+//win.on('ready-to-show', () => {
+//  win.setIgnoreMouseEvents(true, { forward: true });
+//})
 }
 
 ipcMain.on('resize-window', (event, { width, height }) => {
@@ -50,11 +50,11 @@ ipcMain.on('resize-window', (event, { width, height }) => {
   }
 });
 
-ipcMain.on('set-mouse-events', (event, interactive) => {
-  if (win) {
-    win.setIgnoreMouseEvents(!interactive, { forward: true });
-  }
-});
+// ipcMain.on('set-mouse-events', (event, interactive) => {
+//   if (win) {
+//     win.setIgnoreMouseEvents(!interactive, { forward: true });
+//   }
+// });
 
 
 function resetSparkOutput() {

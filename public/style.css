@@ -72,49 +72,42 @@
 }
 
 #spark-popup {
-  display: none; 
+  display: none;
+  background: transparent !important;
   position: fixed;
-  top: 90px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 90%;
-  max-width: 550px;
-  max-height: 550px; /*calc(100vh - 120px); /* Sets a max size that respects the top offset */
-
-  /* Flexbox Layout */
-  display: flex;
-  flex-direction: column;
-
-  /* Visuals & Spacing */
-  background: rgba(30, 30, 30, 0.9);
-  backdrop-filter: blur(12px);
-  border-radius: 12px;
-  padding: 16px;
-  color: #fff;
-  overflow: hidden;
-  z-index: 10000;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.6);
+  z-index: 1000;
 }
 
 #spark-popup.show {
-  display: flex;
+  display: block;
 }
 
 #popup-content {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;       /* was #111 */
+  color: #fff;            /* force all text inside white */
+  border-radius: 12px;
+  min-width: 300px;
+  min-height: 200px;
   display: flex;
   flex-direction: column;
-  flex-grow: 1; /* This is the key property to make it fill the parent */
-  min-height: 0; /* Prevents flexbox from overflowing */
+  overflow: visible;
 }
 
 #spark-popup-text {
-  flex-grow: 1; /* This is key: allows the text area to take all available space */
-  overflow-y: auto; /* Makes ONLY the text area scrollable if content overflows */
-  padding: 16px; /* Use regular padding all around */
-  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-  font-size: 15px;
-  color: #f1f1f1;
-  line-height: 1.6;
-  white-space: normal;
+  flex: 1;
+  margin: 16px;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: inherit; 
+  max-height: calc(80vh - 60px); /* account for footer height */
+  overflow-y: auto;
 }
 
 #spark-popup-text code {
@@ -141,13 +134,14 @@ word-break: break-word;      /* Ensures long words don’t overflow */
 }
 
 #popup-footer {
-  /* Remove absolute positioning and use flex properties instead */
-  flex-shrink: 0; /* Prevents the footer from shrinking */
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 12px 16px;
-  border-top: 1px solid #444; /* A subtle separator line */
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 1px solid #444;
+  background: #2b2b2b;    /* slightly lighter than the card */
+  color: #fff; 
 }
 
 /* Button styles */
@@ -165,7 +159,9 @@ word-break: break-word;      /* Ensures long words don’t overflow */
 #spark-popup button:hover {
   background-color: rgba(255, 255, 255, 0.3);
 }
-
+#popup-footer button {
+  color: #fff;
+}
 
 html {
   box-sizing: border-box;
@@ -177,23 +173,22 @@ html {
 html, body {
   margin: 0;
   padding: 0;
-  overflow: hidden;
   height: 100%;
   width: 100%;
 }
 
 #popup-resize-grip {
-  /* Positioning */
   position: absolute;
-  width: 20px;
-  height: 20px;
-  bottom: 0;
-  right: 0;
-  z-index: 100;
-
-  /* Appearance & Interaction */
-  cursor: nwse-resize; /* Sets the diagonal resize cursor */
-  pointer-events: auto; /* Ensures the grip can be clicked and dragged */
+  width: 16px;
+  height: 16px;
+  bottom: 8px;
+  right: 8px;
+  cursor: nwse-resize;
+  background: rgba(255,255,255,0.3);
+  border-radius: 2px;
+  z-index: 10;
+  /* ensure pointer events pass through */
+  pointer-events: auto;
 }
 
 /* Optional: Add a visual indicator inside the grip */

@@ -75,34 +75,48 @@ function updateBubble(status) {
 
 // --- Show Popup with Markdown/Code ---
 function showPopup(text) {
-  const popup = document.getElementById("spark-popup");
-  const popupText = document.getElementById("spark-popup-text");
-  const bubble = document.getElementById('bubble');
+  const overlay   = document.getElementById('spark-popup');
+  const content   = document.getElementById('popup-content');
+  const popupText = document.getElementById('spark-popup-text');
 
-  // DYNAMIC POSITIONING LOGIC
-  const bubbleRect = bubble.getBoundingClientRect(); 
-  const popupTop = bubbleRect.bottom + 15; // 15px margin
-  popup.style.top = `${popupTop}px`; // Set top position dynamically
-
-  // Restore saved dimensions (but not top)
-  if (popupSettings.width) popup.style.width = popupSettings.width;
-  if (popupSettings.height) popup.style.height = popupSettings.height;
-  if (popupSettings.left) {
-      popup.style.left = popupSettings.left;
-  }
-  
-  // Show the popup
+  // 1) clear + render
+  popupText.innerHTML = '';
   popupText.innerHTML = marked.parse(text);
-  popup.classList.remove("hidden"); // This might be redundant now, but safe
-  popup.classList.add("show");
+
+  // 2) position the CONTENT div under the bubble
+  const bubbleRect = document.getElementById('bubble').getBoundingClientRect();
+  const vh = window.innerHeight;
+  const maxH = vh * 0.8;              // must match CSS max-height
+  let top = bubbleRect.bottom + 15;   // 15px gap
+  if (top + maxH > vh) {
+    top = vh - maxH - 20;             // keep it fully on screen
+  }
+  content.style.top = `${top}px`;
+
+  // 3) restore any saved width/height/left
+  if (popupSettings.width)  content.style.width  = popupSettings.width;
+  if (popupSettings.height) content.style.height = popupSettings.height;
+  if (popupSettings.left)   content.style.left   = popupSettings.left;
+
+  // 4) reveal the overlay
+  overlay.classList.add('show');
 }
 
 // --- Close Popup ---
 function closePopup() {
-  const popup = document.getElementById("spark-popup");
-  savePopupDimensions();
-  popup.classList.remove("show");
-  popup.classList.add("hidden");
+  const overlay = document.getElementById('spark-popup');
+  const content = document.getElementById('popup-content');
+
+  // save the CONTENT dims & position
+  popupSettings = {
+    width:  content.style.width,
+    height: content.style.height,
+    left:   content.style.left,
+    top:    content.style.top
+  };
+  localStorage.setItem('spark-popup-settings', JSON.stringify(popupSettings));
+
+  overlay.classList.remove('show');
 
 }
 
@@ -137,18 +151,19 @@ function savePopupDimensions() {
 
 // --- ResizeObserver Setup ---
 document.addEventListener('DOMContentLoaded', () => {
-  const popup = document.getElementById("spark-popup");
-  const grip = document.getElementById("popup-resize-grip");
+  const overlay = document.getElementById("spark-popup");
+  const content = document.getElementById("popup-content");
+  const grip    = document.getElementById("popup-resize-grip");
 
-  // Save size on change
+  // 1) Observe the card, not the overlay
   const resizeObserver = new ResizeObserver(entries => {
     for (let entry of entries) {
-      if (entry.target === popup) {
+      if (entry.target === content) {
         savePopupDimensions();
       }
     }
   });
-  resizeObserver.observe(popup);
+  resizeObserver.observe(content);
 
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
@@ -167,33 +182,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // Only grip triggers resize
   grip.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const popup = document.getElementById("spark-popup");
-    popup.style.maxHeight = 'none';
-    const rect = popup.getBoundingClientRect();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startWidth = rect.width;
-    const startHeight = rect.height;
-  
+    const rect = content.getBoundingClientRect();
+    const startX = e.clientX, startY = e.clientY;
+    const startW = rect.width, startH = rect.height;
+    
     function onMouseMove(ev) {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      const newWidth = startWidth + dx;
-      const newHeight = startHeight + dy;
-  
-      // Resize the DOM popup
-      popup.style.width = `${newWidth}px`;
-      popup.style.height = `${newHeight}px`;
-  
-      // Tell Electron to resize the actual window
-      //ipcRenderer.send('resize-window', { width: newWidth, height: newHeight});
+      let newW = startW + (ev.clientX - startX);
+      let newH = startH + (ev.clientY - startY);
+      // clamp so it never goes below your min dimensions
+      newW = Math.max(newW, 350);
+      newH = Math.max(newH, 240);
+      content.style.width  = `${newW}px`;
+      content.style.height = `${newH}px`;
     }
-  
     function onMouseUp() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     }
-  
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
   });

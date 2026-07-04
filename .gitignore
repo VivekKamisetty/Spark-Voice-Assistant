@@ -11,3 +11,6 @@
 # Mac system files
 .DS_Store
 __pycache__/
+
+# Python virtual environments
+/backend/whisper-env/

@@ -15,9 +15,23 @@ import atexit
 
 from claude_client import route_claude_reply as route_gpt_reply
 from tts import speak
-from bridge import write_status
+import ws_server
+import protocol
 should_listen = True  # Global flag to pause listening during TTS
 import signal
+
+def write_status(status, text="", show_popup=False):
+    # "inactive" predates the v2 spec's state enum; it means the same thing
+    # as "idle" so it's translated here rather than widening VALID_STATES.
+    protocol_state = "idle" if status == "inactive" else status
+    ws_server.broadcast(protocol.state_message(protocol_state))
+    if text:
+        ws_server.broadcast(protocol.assistant_chunk_message(text))
+        done = protocol.assistant_done_message()
+        done["show_popup"] = show_popup  # not in the v2 spec proper; Phase 3's
+        # panel redesign replaces this flag with auto-unfold, kept for now so
+        # the existing popup behavior doesn't regress in the meantime.
+        ws_server.broadcast(done)
 
 def handle_exit_signal(signum, frame):
     cleanup_before_exit()
@@ -90,6 +104,7 @@ def run_speak(text):
 warnings.filterwarnings("ignore", category=UserWarning, module='whisper.transcribe')
 print = functools.partial(print, flush=True)
 
+ws_server.start()
 model = whisper.load_model("small.en")
 sample_rate = 16000
 block_duration = 1.0
@@ -130,17 +145,32 @@ def mic_listener(transcript_queue):
     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, callback=audio_callback):
         while True:
             print("[Spark] 🎧 Listening...")
-            write_status("listening")
+            # Deliberately not broadcasting "listening" here: this loop restarts
+            # on every capture attempt, including harmless false-starts on
+            # background noise, which happens continuously and independently of
+            # whatever main() is actually doing (thinking/speaking). Broadcasting
+            # from both places races and stomps on main()'s real state — main()
+            # is the sole owner of state broadcasts; "listening" is simply
+            # whatever state persists whenever main() isn't busy with a turn.
             audio_data = []
             speech_detected = False
             silence_timer = None
             speech_start_time = None
+            last_amplitude_broadcast = 0.0
 
             while True:
                 block = q.get()
                 block = block.flatten().astype(np.float32)
                 max_amplitude = np.max(np.abs(block))
                 #print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
+
+                # Throttled to ~30Hz so the orb (Phase 3) has smooth live data
+                # without flooding the socket on every audio block.
+                now = time.time()
+                if now - last_amplitude_broadcast >= 1 / 30:
+                    rms = float(np.sqrt(np.mean(block ** 2)))
+                    ws_server.broadcast(protocol.amplitude_message("mic", rms))
+                    last_amplitude_broadcast = now
 
                 if max_amplitude > vad_threshold and should_listen:  # Add "and should_listen" here
                     audio_data.append(block)
@@ -273,6 +303,12 @@ def main():
 
             unmute_microphone()
             should_listen = True  # Resume listening
+            # mic_listener's own loop only re-broadcasts "listening" once it
+            # next breaks out of its capture loop, which can't happen while
+            # should_listen was False — so the state would otherwise be stuck
+            # showing "speaking" until fresh audio nudges it. Send it here
+            # explicitly instead of relying on that side effect.
+            write_status("listening")
             start_idle_timer(45)
 
             if len(chat_history) > 20:

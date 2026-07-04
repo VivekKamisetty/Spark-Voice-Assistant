@@ -1,12 +1,9 @@
 const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
-const fs = require('fs'); // <-- 💥 IMPORTANT! you missed this
 
 let win;
 let sparkProcess = null;
-
-const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json'); // <-- You also missed defining this before using
 
 function createWindow() {
   const { screen } = require('electron');
@@ -57,20 +54,6 @@ ipcMain.on('set-mouse-events', (event, interactive) => {
 });
 
 
-function resetSparkOutput() {
-  const defaultData = {
-    status: "idle",
-    show_popup: false,
-    text: ""
-  };
-  try {
-    fs.writeFileSync(outputPath, JSON.stringify(defaultData, null, 2));
-    console.log('[Spark Main] 🧹 Reset spark_output.json with defaults.');
-  } catch (e) {
-    console.error('[Spark Main] Failed to reset:', e);
-  }
-}
-
 function startSparkBackend() {
   if (!sparkProcess) {
     console.log('[Spark Main] 🚀 Starting backend...');
@@ -99,7 +82,6 @@ function startSparkBackend() {
 }
 
 app.whenReady().then(() => {
-  resetSparkOutput();
   createWindow();
   startSparkBackend();
 });

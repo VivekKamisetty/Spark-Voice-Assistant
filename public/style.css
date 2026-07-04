@@ -28,19 +28,19 @@
 }
 
 /* Listening status: green pulse */
-.listening {
+#bubble.listening {
   background-color: #4CAF50;
   animation: pulse-listening 2s infinite;
 }
 
 /* Thinking status: blue pulse */
-.thinking {
+#bubble.thinking {
   background-color: #2196F3;
   animation: pulse-thinking 1.5s infinite;
 }
 
 /* Speaking status: yellow ripple */
-.speaking {
+#bubble.speaking {
   background-color: #FFC107;
   animation: ripple-speaking 2s infinite;
 }

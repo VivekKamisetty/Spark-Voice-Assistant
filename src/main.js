@@ -74,7 +74,14 @@ function resetSparkOutput() {
 function startSparkBackend() {
   if (!sparkProcess) {
     console.log('[Spark Main] 🚀 Starting backend...');
-    sparkProcess = spawn('python3', ['backend/spark_whisper_mic.py']);
+    const backendDir = path.join(__dirname, '..', 'backend');
+    const pythonPath = path.join(backendDir, 'whisper-env', 'bin', 'python');
+    // cwd must be backendDir: spark_whisper_mic.py's load_dotenv() resolves
+    // .env relative to the process's working directory, not the script path.
+    // "arch -arm64" forces native execution: this Electron/Node install runs
+    // under Rosetta on Apple Silicon, and a translated (x86_64) parent spawns
+    // children in x86_64 by default, which crashes torch (installed arm64-only).
+    sparkProcess = spawn('arch', ['-arm64', pythonPath, 'spark_whisper_mic.py'], { cwd: backendDir });
 
     sparkProcess.stdout.on('data', (data) => {
       console.log(`[Spark] ${data}`);
@@ -92,20 +99,16 @@ function startSparkBackend() {
 }
 
 app.whenReady().then(() => {
-  resetSparkOutput();  // 🧹 very good!
+  resetSparkOutput();
   createWindow();
-
-  // globalShortcut.register('CommandOrControl+Shift+S', () => {
-  //   win.reload();
-  // });
-
-  // globalShortcut.register('Space', () => {
-  //   console.log('[Spark Main] 🔥 Spacebar pressed!');
-  //   startSparkBackend();
-  // });
+  startSparkBackend();
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (sparkProcess) {
+    sparkProcess.kill();
+    sparkProcess = null;
+  }
 });
 

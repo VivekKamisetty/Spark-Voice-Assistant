@@ -21,8 +21,8 @@ def on_wake_word_detected():
     launch_frontend()
 
 # Run wake word listener in a thread
-threading.Thread(target=wake_word_listener, args=(on_wake_word_detected,), daemon=True).start()
-
+#threading.Thread(target=wake_word_listener, args=(on_wake_word_detected,), daemon=True).start()
+on_wake_word_detected()  # Directly launch frontend for testing
 # Keep alive
 while True:
     time.sleep(1)

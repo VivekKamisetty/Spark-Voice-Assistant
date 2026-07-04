@@ -13,9 +13,10 @@ import sys
 import atexit
 
 
-from gpt_client import route_gpt_reply
+from claude_client import route_claude_reply as route_gpt_reply
 from tts import speak
 from bridge import write_status
+should_listen = True  # Global flag to pause listening during TTS
 import signal
 
 def handle_exit_signal(signum, frame):
@@ -36,8 +37,8 @@ def start_idle_timer(timeout=15):
         idle_timer = None
 
     def shutdown():
-        print("[Spark] 💤 No input received — entering idle.")
-        os.kill(os.getpid(), signal.SIGTERM)
+        print("[Spark] 💤 No input received — going idle.")
+        write_status("inactive")
 
     idle_timer = threading.Timer(timeout, shutdown)
     idle_timer.daemon = True
@@ -94,6 +95,7 @@ sample_rate = 16000
 block_duration = 1.0
 vad_threshold = calibrate_vad_threshold()
 max_silence_time = 1.0
+max_recording_time = 10.0  # Hard cap so a noisy room can't keep the recorder open forever
 
 q = queue.Queue()
 
@@ -132,6 +134,7 @@ def mic_listener(transcript_queue):
             audio_data = []
             speech_detected = False
             silence_timer = None
+            speech_start_time = None
 
             while True:
                 block = q.get()
@@ -139,8 +142,10 @@ def mic_listener(transcript_queue):
                 max_amplitude = np.max(np.abs(block))
                 #print(f"[DEBUG] Amplitude: {max_amplitude:.6f}")
 
-                if max_amplitude > vad_threshold:
+                if max_amplitude > vad_threshold and should_listen:  # Add "and should_listen" here
                     audio_data.append(block)
+                    if not speech_detected:
+                        speech_start_time = time.time()
                     speech_detected = True
                     silence_timer = None
                 elif speech_detected:
@@ -148,6 +153,12 @@ def mic_listener(transcript_queue):
                         silence_timer = time.time()
                     elif time.time() - silence_timer > max_silence_time:
                         break
+
+                # Safety cap: finalize the utterance even if trailing noise keeps
+                # resetting the silence timer, so we never get stuck recording forever.
+                if speech_detected and time.time() - speech_start_time > max_recording_time:
+                    print("[Spark] ⏱️ Max recording time reached, finalizing utterance.")
+                    break
 
             if not audio_data:
                 print("[Whisper] No significant speech detected.")
@@ -161,28 +172,37 @@ def mic_listener(transcript_queue):
                 print("[Whisper] Skipped silent audio block.")
                 continue
 
+            if len(audio_data) < int(0.3 * sample_rate):
+                print(f"[Whisper] Skipped clip too short to be speech ({len(audio_data)} samples).")
+                continue
+
             print(f"[Spark] Captured {len(audio_data)} samples, running Whisper...")
             result = model.transcribe(audio_data, language="en")
             print(f"[Whisper Result] {result}")
 
             text = result["text"].strip()
-            if text:
+            segments = result.get("segments", [])
+            avg_no_speech_prob = (
+                sum(s.get("no_speech_prob", 0.0) for s in segments) / len(segments)
+                if segments else 1.0
+            )
+            max_temperature = max((s.get("temperature", 0.0) for s in segments), default=0.0)
+
+            # Whisper hallucinates filler words ("you", ".", "thank you") on quiet/
+            # noisy clips. Its own no_speech_prob is a much more reliable signal for
+            # this than the transcribed text, so trust it over a non-empty string.
+            # A high temperature means Whisper exhausted its confidence fallback
+            # ladder and gave up on a clean decode — a sign of garbled audio
+            # producing garbage text rather than a real (if quiet) utterance.
+            if avg_no_speech_prob > 0.6:
+                print(f"[Whisper] Ignored likely hallucination (no_speech_prob={avg_no_speech_prob:.2f}): '{text}'")
+            elif max_temperature >= 0.8:
+                print(f"[Whisper] Ignored low-confidence garbled transcription (temperature={max_temperature:.1f}): '{text}'")
+            elif text:
                 print(f"[User] {text}")
                 transcript_queue.put(text)
             else:
                 print("[Whisper] No valid text transcribed.")
-
-def schedule_idle_shutdown(timeout=10):
-    def shutdown():
-        print("[Spark] 💤 No input received — entering idle.")
-        from backend_controller import stop_backend
-        stop_backend()
-        from bridge import write_status
-        write_status("inactive")
-
-    idle_timer = threading.Timer(timeout, shutdown)
-    idle_timer.daemon = True
-    idle_timer.start()
 
 def main():
     print("[Spark] Starting up with VAD and hotkeys...")
@@ -196,11 +216,13 @@ def main():
     while True:
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
-            words = line.lower().split()
+            normalized_line = line.lower().strip()
 
-            # ✅ Ignore very short prompts
-            if len(words) <= 2:
-                print(f"[Spark] ⏭️ Ignored short prompt: '{line}'")
+            # ✅ Ignore empty/noise-only transcriptions (e.g. just punctuation)
+            cleaned_words = [w.strip(".,!?") for w in normalized_line.split()]
+            cleaned_words = [w for w in cleaned_words if w]
+            if not cleaned_words:
+                print(f"[Spark] ⏭️ Ignored empty/noise prompt: '{line}'")
                 write_status("listening")
                 continue
 
@@ -209,7 +231,6 @@ def main():
                 "thank you", "thanks", "i'm sorry", "sorry", "ok", "okay", "cool", "yep", "yes", "no", "all right"
             }
 
-            normalized_line = line.lower().strip()
             if normalized_line in polite_phrases:
                 print(f"[Spark] 🙏 Ignored polite-only phrase: '{line}'")
                 write_status("listening")
@@ -221,7 +242,7 @@ def main():
 
             write_status("thinking")
             cancel_idle_timer()
-            reply, model_used = route_gpt_reply(line, chat_history, screenshot_enabled=True)
+            reply, model_used, tools_called = route_gpt_reply(line, chat_history, screenshot_enabled=True)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
@@ -231,13 +252,28 @@ def main():
 
             write_status("speaking", text=reply, show_popup=show_popup)
 
+            global should_listen
+            should_listen = False  # Stop listening during TTS
             mute_microphone()
             speak(reply)
-            time.sleep(0.75)
-            unmute_microphone()
-            start_idle_timer(15)
+            # Small safety buffer for audio hardware drain after speak() returns.
+            # speak() already blocks for the full utterance via runAndWait(), so
+            # this isn't scaled by reply length — it only covers residual lag
+            # between the TTS engine reporting "done" and the speaker actually
+            # finishing output.
+            time.sleep(0.5)
 
-            write_status("listening")
+            # Discard any audio blocks that leaked in while muted (e.g. TTS bleed)
+            # so they aren't mistaken for the next real utterance.
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+
+            unmute_microphone()
+            should_listen = True  # Resume listening
+            start_idle_timer(45)
 
             if len(chat_history) > 20:
                 chat_history = chat_history[-18:]

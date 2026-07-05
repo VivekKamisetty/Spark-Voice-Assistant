@@ -54,6 +54,8 @@ ipcMain.on('set-mouse-events', (event, interactive) => {
 });
 
 
+let quitting = false;
+
 function startSparkBackend() {
   if (!sparkProcess) {
     console.log('[Spark Main] 🚀 Starting backend...');
@@ -77,8 +79,31 @@ function startSparkBackend() {
     sparkProcess.on('close', (code) => {
       console.log(`[Spark] exited with code ${code}`);
       sparkProcess = null;
+      // The backend dying (crash or otherwise) leaves a UI with nothing
+      // behind it — quit the whole app rather than leaving a zombie window,
+      // matching the same "if one dies, everything dies" lifecycle as the
+      // reverse direction below.
+      if (!quitting) {
+        quitting = true;
+        app.quit();
+      }
     });
   }
+}
+
+function killSparkBackend() {
+  if (!sparkProcess) return;
+  const proc = sparkProcess;
+  // kill() sends SIGTERM, which spark_whisper_mic.py's own handler normally
+  // catches and exits cleanly on — but we've seen it not always respond
+  // promptly (e.g. mid-blocking-call). Escalate to SIGKILL if it hasn't
+  // actually exited after a short grace period, so a hung backend can never
+  // outlive the app and squat on the WebSocket port for the next launch.
+  proc.kill();
+  const forceKillTimer = setTimeout(() => {
+    if (sparkProcess === proc) proc.kill('SIGKILL');
+  }, 3000);
+  proc.once('exit', () => clearTimeout(forceKillTimer));
 }
 
 app.whenReady().then(() => {
@@ -86,11 +111,21 @@ app.whenReady().then(() => {
   startSparkBackend();
 });
 
+// macOS doesn't quit an app when its last window is closed by default — it
+// stays running in the background with the Python backend still alive,
+// which then squats on the WebSocket port when you try to relaunch. Force
+// a real quit instead, since Spark isn't meant to be a background/menu-bar
+// app today.
+app.on('window-all-closed', () => {
+  app.quit();
+});
+
+app.on('before-quit', () => {
+  quitting = true;
+  killSparkBackend();
+});
+
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  if (sparkProcess) {
-    sparkProcess.kill();
-    sparkProcess = null;
-  }
 });
 

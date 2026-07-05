@@ -3,10 +3,9 @@ import subprocess
 import functools
 import threading
 import queue
-import whisper
+import mlx_whisper
 import sounddevice as sd
 import numpy as np
-import warnings
 import os
 import signal
 import sys
@@ -101,12 +100,20 @@ def calibrate_vad_threshold(duration=2.0):
 def run_speak(text):
     speak(text)
 
-warnings.filterwarnings("ignore", category=UserWarning, module='whisper.transcribe')
 print = functools.partial(print, flush=True)
 
+# mlx-whisper runs on Apple Silicon's GPU (via Metal), letting us use a much
+# bigger, more accurate model than the old CPU-only openai-whisper setup for
+# comparable latency. The prompt below biases decoding toward vocabulary that
+# general-purpose Whisper models otherwise consistently mis-hear (proper
+# nouns and uncommon names aren't well represented in training data).
+MLX_MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
+VOCAB_PROMPT = "Vivek Kamisetty, Claude, Anthropic, Spark, Whisper."
+
 ws_server.start()
-model = whisper.load_model("small.en")
 sample_rate = 16000
+print("[Spark] Warming up mlx-whisper model...")
+mlx_whisper.transcribe(np.zeros(sample_rate, dtype=np.float32), path_or_hf_repo=MLX_MODEL_REPO)
 block_duration = 1.0
 vad_threshold = calibrate_vad_threshold()
 max_silence_time = 1.0
@@ -207,7 +214,11 @@ def mic_listener(transcript_queue):
                 continue
 
             print(f"[Spark] Captured {len(audio_data)} samples, running Whisper...")
-            result = model.transcribe(audio_data, language="en")
+            result = mlx_whisper.transcribe(
+                audio_data,
+                path_or_hf_repo=MLX_MODEL_REPO,
+                initial_prompt=VOCAB_PROMPT,
+            )
             print(f"[Whisper Result] {result}")
 
             text = result["text"].strip()

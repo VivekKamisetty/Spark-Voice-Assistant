@@ -16,8 +16,15 @@ from claude_client import route_claude_reply as route_gpt_reply
 from tts import speak
 import ws_server
 import protocol
+import store
 should_listen = True  # Global flag to pause listening during TTS
 import signal
+
+# Set once main() starts a session; cleanup_before_exit() needs them to close
+# the session out cleanly on shutdown, but doesn't have direct access to
+# main()'s local variables.
+_db = None
+_session_id = None
 
 def write_status(status, text="", show_popup=False):
     # "inactive" predates the v2 spec's state enum; it means the same thing
@@ -70,6 +77,8 @@ def cleanup_before_exit():
         unmute_microphone()
     except Exception as e:
         print(f"[Spark] ⚠️ Failed to unmute: {e}")
+    if _db is not None and _session_id is not None:
+        store.end_session(_db, _session_id)
     write_status("inactive")
 
 atexit.register(cleanup_before_exit)
@@ -245,10 +254,61 @@ def mic_listener(transcript_queue):
             else:
                 print("[Whisper] No valid text transcribed.")
 
+def speak_reply(text, show_popup=False):
+    """Speak a reply and handle the mic mute/unmute dance around it. Shared by
+    the normal conversation flow and the clear-history confirmation prompts
+    below, which need the exact same TTS-safety handling.
+    """
+    write_status("speaking", text=text, show_popup=show_popup)
+
+    global should_listen
+    should_listen = False  # Stop listening during TTS
+    mute_microphone()
+    speak(text)
+    # Small safety buffer for audio hardware drain after speak() returns.
+    # speak() already blocks for the full utterance via runAndWait(), so
+    # this isn't scaled by reply length — it only covers residual lag
+    # between the TTS engine reporting "done" and the speaker actually
+    # finishing output.
+    time.sleep(0.5)
+
+    # Discard any audio blocks that leaked in while muted (e.g. TTS bleed)
+    # so they aren't mistaken for the next real utterance.
+    while not q.empty():
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
+
+    unmute_microphone()
+    should_listen = True  # Resume listening
+    # mic_listener's own loop only re-broadcasts "listening" once it next
+    # breaks out of its capture loop, which can't happen while should_listen
+    # was False — so the state would otherwise be stuck showing "speaking"
+    # until fresh audio nudges it. Send it here explicitly instead of relying
+    # on that side effect.
+    write_status("listening")
+
+
+CLEAR_HISTORY_PHRASES = {"clear history", "clear my history", "clear the history"}
+CONFIRM_PHRASES = {"yes", "yeah", "yep", "confirm", "do it", "sure", "go ahead"}
+
+
 def main():
     print("[Spark] Starting up with VAD and hotkeys...")
     unmute_microphone()
-    chat_history = []
+
+    global _db, _session_id
+    _db = store.init_db()
+    _session_id = store.start_session(_db)
+    chat_history = store.load_recent_messages(_db, limit=20)
+
+    # This is deliberately a small, one-off yes/no state machine, not a
+    # general confirmation system — Phase 4 builds that (reusing the
+    # confirmation_request/confirmation_response protocol messages already
+    # defined in Phase 0) and this gets replaced with it then.
+    pending_clear_confirmation = False
+
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
 
@@ -258,6 +318,33 @@ def main():
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
             normalized_line = line.lower().strip()
+            # Whisper reliably appends sentence punctuation ("clear history."),
+            # so exact-match phrase checks below compare against this stripped
+            # form rather than normalized_line directly — otherwise none of
+            # them would ever match real transcribed speech.
+            stripped_line = normalized_line.strip(".,!?")
+
+            if pending_clear_confirmation:
+                pending_clear_confirmation = False
+                if stripped_line in CONFIRM_PHRASES:
+                    store.clear_history(_db)
+                    chat_history.clear()
+                    print("[Spark] 🧹 Conversation history cleared.")
+                    speak_reply("Done — I've cleared your conversation history.")
+                else:
+                    speak_reply("Okay, I won't clear anything.")
+                start_idle_timer(45)
+                continue
+
+            if stripped_line in CLEAR_HISTORY_PHRASES:
+                pending_clear_confirmation = True
+                cancel_idle_timer()
+                speak_reply("Are you sure you want to clear your conversation history? Say yes to confirm.")
+                # speak_reply() ends in "listening" for the normal case, but
+                # we're now specifically waiting on a yes/no — the protocol
+                # already has a state for exactly this.
+                write_status("awaiting_confirmation")
+                continue
 
             # ✅ Ignore empty/noise-only transcriptions (e.g. just punctuation)
             cleaned_words = [w.strip(".,!?") for w in normalized_line.split()]
@@ -272,7 +359,7 @@ def main():
                 "thank you", "thanks", "i'm sorry", "sorry", "ok", "okay", "cool", "yep", "yes", "no", "all right"
             }
 
-            if normalized_line in polite_phrases:
+            if stripped_line in polite_phrases:
                 print(f"[Spark] 🙏 Ignored polite-only phrase: '{line}'")
                 write_status("listening")
                 continue
@@ -280,6 +367,7 @@ def main():
             # ✅ Process prompt
             print(f"[Spark] [User] {line}")
             chat_history.append({"role": "user", "content": line})
+            store.add_message(_db, _session_id, "user", line)
 
             write_status("thinking")
             cancel_idle_timer()
@@ -287,41 +375,18 @@ def main():
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
+            store.add_message(_db, _session_id, "assistant", reply)
+            if tools_called:
+                store.add_message(_db, _session_id, "tool", f"Used tools: {', '.join(tools_called)}")
 
             is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
             show_popup = model_used == "gpt-4o" or is_multiline
 
-            write_status("speaking", text=reply, show_popup=show_popup)
-
-            global should_listen
-            should_listen = False  # Stop listening during TTS
-            mute_microphone()
-            speak(reply)
-            # Small safety buffer for audio hardware drain after speak() returns.
-            # speak() already blocks for the full utterance via runAndWait(), so
-            # this isn't scaled by reply length — it only covers residual lag
-            # between the TTS engine reporting "done" and the speaker actually
-            # finishing output.
-            time.sleep(0.5)
-
-            # Discard any audio blocks that leaked in while muted (e.g. TTS bleed)
-            # so they aren't mistaken for the next real utterance.
-            while not q.empty():
-                try:
-                    q.get_nowait()
-                except queue.Empty:
-                    break
-
-            unmute_microphone()
-            should_listen = True  # Resume listening
-            # mic_listener's own loop only re-broadcasts "listening" once it
-            # next breaks out of its capture loop, which can't happen while
-            # should_listen was False — so the state would otherwise be stuck
-            # showing "speaking" until fresh audio nudges it. Send it here
-            # explicitly instead of relying on that side effect.
-            write_status("listening")
+            speak_reply(reply, show_popup=show_popup)
             start_idle_timer(45)
 
+            # Bounds Claude's context window only — the database keeps the
+            # full history regardless of what's trimmed from memory here.
             if len(chat_history) > 20:
                 chat_history = chat_history[-18:]
         else:

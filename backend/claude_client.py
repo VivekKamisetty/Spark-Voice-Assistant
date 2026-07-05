@@ -6,8 +6,21 @@ import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+import ws_server
+import protocol
+
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# AppleScript/osascript calls against Calendar or Reminders can legitimately
+# take much longer than a typical shell command, especially with several
+# calendars — 10s was killing valid in-progress calls, not just runaway ones.
+SHELL_COMMAND_TIMEOUT = 45
+
+# Caps the tool-use loop below so a persistently failing approach (wrong tool,
+# bad permissions, etc.) fails gracefully after a bounded number of attempts
+# instead of Claude silently improvising increasingly complex workarounds.
+MAX_TOOL_ITERATIONS = 8
 
 # Define tools that Claude can use
 TOOLS = [
@@ -63,10 +76,10 @@ TOOLS = [
 def execute_shell_command(command: str) -> str:
     """Execute a shell command and return output."""
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=SHELL_COMMAND_TIMEOUT)
         return result.stdout[:500] if result.stdout else result.stderr[:500]
     except subprocess.TimeoutExpired:
-        return "Command timed out after 10 seconds."
+        return f"Command timed out after {SHELL_COMMAND_TIMEOUT} seconds."
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
@@ -100,6 +113,17 @@ def open_application(app_name: str) -> str:
         return f"Opened {app_name}."
     except Exception as e:
         return f"Error opening application: {str(e)}"
+
+
+def _tool_summary(tool_name: str, tool_input: dict) -> str:
+    """Short human-readable description of a tool call, for tool_activity messages."""
+    if tool_name == "execute_shell_command":
+        return f"Running: {tool_input.get('command', '')}"[:100]
+    elif tool_name == "search_files":
+        return f"Searching for {tool_input.get('pattern', '')}"
+    elif tool_name == "open_application":
+        return f"Opening {tool_input.get('app_name', '')}"
+    return tool_name
 
 
 def process_tool_call(tool_name: str, tool_input: dict) -> str:
@@ -193,7 +217,14 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
         "You can execute commands, search files, and open applications. "
         "Keep responses concise and natural for voice output. "
         "If the user asks you to do something, use the available tools. "
-        "If a tool call fails, explain it to the user naturally."
+        "If a tool call fails, explain it to the user naturally. "
+        "For Calendar or Reminders, use built-in macOS AppleScript "
+        "(osascript) directly rather than third-party command-line tools "
+        "like icalBuddy — those may not be installed on this machine. "
+        "AppleScript calendar queries can take a while with several "
+        "calendars; that's expected, so run them as a normal foreground "
+        "command and wait for the result rather than backgrounding the "
+        "process or polling for it — the timeout is long enough to wait."
     )
 
     # Call Claude with tool use
@@ -206,25 +237,36 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
             messages=messages
         )
 
-        # Process tool calls in a loop
+        # Process tool calls in a loop, capped so a persistently failing
+        # approach fails gracefully instead of looping indefinitely.
+        iterations = 0
+        hit_iteration_cap = False
         while response.stop_reason == "tool_use":
+            iterations += 1
+            if iterations > MAX_TOOL_ITERATIONS:
+                hit_iteration_cap = True
+                break
+
             # Find tool use blocks
             tool_uses = [block for block in response.content if block.type == "tool_use"]
-            
+
             if not tool_uses:
                 break
-            
+
             # Process each tool call
             tool_results = []
             for tool_use in tool_uses:
                 tool_name = tool_use.name
                 tool_input = tool_use.input
                 tools_called.append(tool_name)
-                
+                summary = _tool_summary(tool_name, tool_input)
+
                 print(f"[Claude] 🔧 Calling tool: {tool_name}")
+                ws_server.broadcast(protocol.tool_activity_message(tool_name, "running", summary))
                 tool_result = process_tool_call(tool_name, tool_input)
                 print(f"[Claude] 📤 Tool result: {tool_result[:100]}...")
-                
+                ws_server.broadcast(protocol.tool_activity_message(tool_name, "done", summary))
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tool_use.id,
@@ -248,6 +290,14 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
                 system=system_prompt,
                 tools=TOOLS,
                 messages=messages
+            )
+
+        if hit_iteration_cap:
+            return (
+                "I'm having trouble completing this — it needed more steps than expected. "
+                "Let me know if you'd like me to keep trying or take a different approach.",
+                model,
+                tools_called,
             )
 
         # Extract final text response

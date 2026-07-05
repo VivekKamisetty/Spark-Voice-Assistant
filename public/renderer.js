@@ -1,13 +1,9 @@
-const fs = require('fs');
-const path = require('path');
 const { marked } = require("marked");
 const hljs = require("highlight.js");
 const { ipcRenderer } = require('electron');
 
-
-
-const outputPath = path.join(__dirname, '..', 'public', 'spark_output.json');
 let lastStatus = "";
+let pendingAssistantText = "";
 
 // --- Setup Markdown + Code Highlighting ---
 marked.setOptions({
@@ -30,29 +26,74 @@ try {
   console.error('[Spark UI] Failed to load popup settings:', e);
 }
 
-// --- Poll the spark_output.json ---
-function pollSparkStatus() {
-  fs.readFile(outputPath, 'utf8', (err, data) => {
-    if (err) return console.error('[Spark UI] Error reading spark_output.json:', err);
+// --- WebSocket connection to the Python backend (protocol v2) ---
+const WS_URL = 'ws://localhost:8765';
+let reconnectDelay = 500;
+const MAX_RECONNECT_DELAY = 5000;
 
+function connectSparkSocket() {
+  const socket = new WebSocket(WS_URL);
+
+  socket.onopen = () => {
+    console.log('[Spark UI] Connected to backend.');
+    reconnectDelay = 500;
+  };
+
+  socket.onmessage = (event) => {
+    let msg;
     try {
-      const json = JSON.parse(data);
-      const status = json.status;
-      const showPopupFlag = json.show_popup;
-      const text = json.text || "";
-
-      if (status !== lastStatus) {
-        lastStatus = status;
-        updateBubble(status);
-      }
-
-      if (showPopupFlag && text.trim().length > 0) {
-        showPopup(text);
-      }
+      msg = JSON.parse(event.data);
     } catch (e) {
-      console.error('[Spark UI] Error parsing JSON:', e);
+      console.error('[Spark UI] Malformed message from backend:', e);
+      return;
     }
-  });
+    handleSparkMessage(msg);
+  };
+
+  socket.onclose = () => {
+    setTimeout(connectSparkSocket, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+  };
+
+  socket.onerror = () => {
+    socket.close();
+  };
+}
+
+function handleSparkMessage(msg) {
+  switch (msg.type) {
+    case 'state':
+      if (msg.value !== lastStatus) {
+        lastStatus = msg.value;
+        updateBubble(msg.value);
+      }
+      break;
+    case 'amplitude':
+      // Not consumed visually yet — the reactive orb lands in Phase 3.
+      // Logged here so Phase 0's acceptance check (amplitude visible in
+      // devtools while speaking) can be verified.
+      console.log('[Spark UI] amplitude', msg.source, msg.rms);
+      break;
+    case 'assistant_chunk':
+      pendingAssistantText += msg.text;
+      break;
+    case 'assistant_done':
+      if (msg.show_popup && pendingAssistantText.trim().length > 0) {
+        showPopup(pendingAssistantText);
+      }
+      pendingAssistantText = "";
+      break;
+    case 'transcript':
+    case 'tool_activity':
+    case 'confirmation_request':
+    case 'briefing':
+      // Not yet consumed by the UI — their features land in later phases.
+      console.log('[Spark UI]', msg.type, msg);
+      break;
+    default:
+      // Unknown message types are ignored gracefully, per protocol v2.
+      break;
+  }
 }
 
 // --- Update Bubble Status ---
@@ -183,5 +224,5 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-// --- Start Polling ---
-setInterval(pollSparkStatus, 500);
+// --- Connect to backend ---
+connectSparkSocket();

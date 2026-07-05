@@ -5,6 +5,7 @@ anthropic==0.116.0
 python-dotenv==1.2.2
 pyttsx3==2.99
 websockets==16.0
+kokoro==0.9.4
 
 # dev/test
 pytest==9.1.1

@@ -13,10 +13,10 @@ import atexit
 
 
 from claude_client import route_claude_reply as route_gpt_reply
-from tts import speak
 import ws_server
 import protocol
 import store
+from tts_engine import KokoroTTSEngine, Pyttsx3TTSEngine
 should_listen = True  # Global flag to pause listening during TTS
 import signal
 
@@ -106,10 +106,16 @@ def calibrate_vad_threshold(duration=2.0):
     return threshold
 
 
-def run_speak(text):
-    speak(text)
-
 print = functools.partial(print, flush=True)
+
+# Kokoro is the primary engine (chosen after a direct side-by-side listening
+# comparison against pyttsx3); pyttsx3 stays available as a fallback behind
+# the same interface if Kokoro's dependencies aren't installed.
+try:
+    tts_engine = KokoroTTSEngine()
+except Exception as e:
+    print(f"[Spark] ⚠️ Kokoro unavailable ({e}), falling back to pyttsx3.")
+    tts_engine = Pyttsx3TTSEngine()
 
 # mlx-whisper runs on Apple Silicon's GPU (via Metal), letting us use a much
 # bigger, more accurate model than the old CPU-only openai-whisper setup for
@@ -254,22 +260,15 @@ def mic_listener(transcript_queue):
             else:
                 print("[Whisper] No valid text transcribed.")
 
-def speak_reply(text, show_popup=False):
-    """Speak a reply and handle the mic mute/unmute dance around it. Shared by
-    the normal conversation flow and the clear-history confirmation prompts
-    below, which need the exact same TTS-safety handling.
+def _post_speech_cleanup():
+    """Shared tail end of speaking, whether it finished naturally or was
+    interrupted: drain any audio that leaked in while muted, unmute, and
+    resume listening.
     """
-    write_status("speaking", text=text, show_popup=show_popup)
-
     global should_listen
-    should_listen = False  # Stop listening during TTS
-    mute_microphone()
-    speak(text)
-    # Small safety buffer for audio hardware drain after speak() returns.
-    # speak() already blocks for the full utterance via runAndWait(), so
-    # this isn't scaled by reply length — it only covers residual lag
-    # between the TTS engine reporting "done" and the speaker actually
-    # finishing output.
+    # Small safety buffer for audio hardware drain. Not needed while the
+    # engine is actively synthesizing/playing further chunks, only once
+    # speech has actually stopped (natural end or interrupt).
     time.sleep(0.5)
 
     # Discard any audio blocks that leaked in while muted (e.g. TTS bleed)
@@ -288,6 +287,104 @@ def speak_reply(text, show_popup=False):
     # until fresh audio nudges it. Send it here explicitly instead of relying
     # on that side effect.
     write_status("listening")
+
+
+def speak_reply(text, show_popup=False):
+    """Speak a single fixed, already-composed reply (no streaming needed —
+    used by the clear-history confirmation flow, not the main Claude-driven
+    conversation, which streams sentences as they're generated instead; see
+    process_claude_turn below).
+    """
+    write_status("speaking", text=text, show_popup=show_popup)
+
+    global should_listen
+    should_listen = False  # Stop listening during TTS
+    mute_microphone()
+    tts_engine.speak_stream(iter([text]))
+    _post_speech_cleanup()
+
+
+def interrupt_watcher():
+    """Watches for an explicit interrupt from the frontend (tap-to-interrupt
+    — Phase 2 deliberately doesn't attempt voice barge-in, which would need
+    real echo cancellation Spark doesn't have; see docs/SPARK_V2_SPEC.md) and
+    stops whatever TTS is currently playing. Runs as its own thread since
+    main()'s loop is blocked on tts_engine.speak_stream() while TTS plays.
+    """
+    while True:
+        msg = ws_server.incoming_queue.get()
+        if msg.get("type") == "interrupt":
+            print("[Spark] 🛑 Interrupt received, stopping TTS.")
+            tts_engine.stop()
+
+
+def process_claude_turn(line, chat_history):
+    """Handles one full conversational turn: runs Claude in a background
+    thread so its streamed sentences can be spoken as they arrive rather than
+    waiting for the complete reply, while the calling (main) thread feeds
+    those sentences to the TTS engine as they're produced. Returns
+    (reply_text, model_used, tools_called).
+    """
+    sentence_queue = queue.Queue()
+    DONE = object()
+    first_sentence = threading.Event()
+    result = {}
+
+    def on_sentence(sentence):
+        if not first_sentence.is_set():
+            first_sentence.set()
+            write_status("speaking")
+            global should_listen
+            should_listen = False  # Stop listening during TTS
+            mute_microphone()
+        ws_server.broadcast(protocol.assistant_chunk_message(sentence))
+        sentence_queue.put(sentence)
+
+    def run_claude():
+        reply, model_used, tools_called = route_gpt_reply(
+            line, chat_history, screenshot_enabled=True, on_sentence=on_sentence
+        )
+        result["reply"] = reply
+        result["model_used"] = model_used
+        result["tools_called"] = tools_called
+        sentence_queue.put(DONE)
+
+    claude_thread = threading.Thread(target=run_claude, daemon=True)
+    claude_thread.start()
+
+    def sentence_stream():
+        while True:
+            item = sentence_queue.get()
+            if item is DONE:
+                return
+            yield item
+
+    tts_engine.speak_stream(sentence_stream())
+    # Note: on interrupt, tts_engine.speak_stream() returns early, but we
+    # still wait for the underlying Claude generation to finish here so its
+    # result can be persisted — main() only touches the database from this
+    # one thread (store.py isn't safe to call from multiple threads), so
+    # abandoning this join in favor of starting the next turn immediately
+    # isn't safe yet. The audible interruption is still immediate; only the
+    # backend bookkeeping trails a moment behind. A real fix (actually
+    # canceling the in-flight generation) is a natural follow-up, not
+    # something to rush alongside everything else in this phase.
+    claude_thread.join()
+
+    reply = result["reply"]
+    is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
+    done = protocol.assistant_done_message()
+    done["show_popup"] = is_multiline
+    ws_server.broadcast(done)
+
+    if first_sentence.is_set():
+        _post_speech_cleanup()
+    else:
+        # Nothing was ever spoken (e.g. an immediate error before any
+        # sentence streamed) — still need to return to listening.
+        write_status("listening")
+
+    return reply, result["model_used"], result["tools_called"]
 
 
 CLEAR_HISTORY_PHRASES = {"clear history", "clear my history", "clear the history"}
@@ -311,6 +408,7 @@ def main():
 
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
+    threading.Thread(target=interrupt_watcher, daemon=True).start()
 
     write_status("listening")
 
@@ -371,7 +469,7 @@ def main():
 
             write_status("thinking")
             cancel_idle_timer()
-            reply, model_used, tools_called = route_gpt_reply(line, chat_history, screenshot_enabled=True)
+            reply, model_used, tools_called = process_claude_turn(line, chat_history)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
@@ -379,10 +477,6 @@ def main():
             if tools_called:
                 store.add_message(_db, _session_id, "tool", f"Used tools: {', '.join(tools_called)}")
 
-            is_multiline = reply.count("\\n") >= 3 or len(reply.splitlines()) >= 3
-            show_popup = model_used == "gpt-4o" or is_multiline
-
-            speak_reply(reply, show_popup=show_popup)
             start_idle_timer(45)
 
             # Bounds Claude's context window only — the database keeps the

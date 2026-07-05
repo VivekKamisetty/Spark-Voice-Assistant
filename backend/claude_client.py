@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 import ws_server
 import protocol
+from sentence_splitter import split_into_sentences
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -141,10 +142,18 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
         return f"Unknown tool: {tool_name}"
 
 
-def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool = False) -> tuple:
+def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool = False, on_sentence=None) -> tuple:
     """
     Route a prompt through Claude with tool use.
     Returns (response_text, model_used, tools_called)
+
+    If on_sentence is given, it's called with each sentence of the reply as
+    soon as it's available (streamed from the API), instead of only once
+    with the complete text at the end — this is what lets the caller start
+    speaking a long reply before the rest of it has finished generating.
+    Tool-calling turns don't usually have text to stream (Claude is deciding
+    to call a tool, not composing a spoken answer yet), but if Claude does
+    say something before calling a tool, that gets streamed too.
     """
     model = "claude-sonnet-5"
     requires_image = False
@@ -227,15 +236,31 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
         "process or polling for it — the timeout is long enough to wait."
     )
 
-    # Call Claude with tool use
-    try:
-        response = client.messages.create(
+    def stream_call():
+        """One streaming API call: yields sentences to on_sentence as they
+        complete, and returns the final Message (same shape client.messages
+        .create() would have returned, including full tool_use blocks) so
+        the tool-use loop below is otherwise unchanged from the non-streaming
+        version.
+        """
+        with client.messages.stream(
             model=model,
             max_tokens=1024,
             system=system_prompt,
             tools=TOOLS,
-            messages=messages
-        )
+            messages=messages,
+        ) as stream:
+            for sentence in split_into_sentences(stream.text_stream):
+                full_text_pieces.append(sentence)
+                if on_sentence:
+                    on_sentence(sentence)
+            return stream.get_final_message()
+
+    full_text_pieces = []
+
+    # Call Claude with tool use
+    try:
+        response = stream_call()
 
         # Process tool calls in a loop, capped so a persistently failing
         # approach fails gracefully instead of looping indefinitely.
@@ -284,30 +309,28 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
             })
 
             # Call Claude again with tool results
-            response = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                system=system_prompt,
-                tools=TOOLS,
-                messages=messages
-            )
+            response = stream_call()
 
         if hit_iteration_cap:
-            return (
+            fallback = (
                 "I'm having trouble completing this — it needed more steps than expected. "
-                "Let me know if you'd like me to keep trying or take a different approach.",
-                model,
-                tools_called,
+                "Let me know if you'd like me to keep trying or take a different approach."
             )
+            if on_sentence:
+                on_sentence(fallback)
+            return fallback, model, tools_called
 
-        # Extract final text response
-        final_text = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                final_text += block.text
+        final_text = "".join(full_text_pieces)
+        if not final_text:
+            final_text = "I'm ready to help."
+            if on_sentence:
+                on_sentence(final_text)
 
-        return final_text or "I'm ready to help.", model, tools_called
+        return final_text, model, tools_called
 
     except Exception as e:
         print(f"[Claude] Error: {e}")
-        return f"Sorry, there was a problem: {str(e)}", model, tools_called
+        error_text = f"Sorry, there was a problem: {str(e)}"
+        if on_sentence:
+            on_sentence(error_text)
+        return error_text, model, tools_called

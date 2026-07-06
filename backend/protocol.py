@@ -23,18 +23,33 @@ def state_message(value: str) -> dict:
     return {**_base("state"), "value": value}
 
 
-def amplitude_message(source: str, rms: float) -> dict:
+def amplitude_message(source: str, bass: float, mid: float, high: float) -> dict:
+    """Per-band energy (not a single RMS) so the orb can drive different
+    motion from different frequency content — bass/mid/high computed via a
+    cheap FFT in audio_bands.py rather than a browser-side AnalyserNode,
+    since no raw audio stream reaches the Electron renderer to analyze.
+    """
     if source not in ("mic", "tts"):
         raise ValueError(f"Unknown amplitude source: {source!r}")
-    return {**_base("amplitude"), "source": source, "rms": float(rms)}
+    return {
+        **_base("amplitude"),
+        "source": source,
+        "bass": float(bass),
+        "mid": float(mid),
+        "high": float(high),
+    }
 
 
 def transcript_message(role: str, text: str, partial: bool = False) -> dict:
     return {**_base("transcript"), "role": role, "text": text, "partial": partial}
 
 
-def assistant_chunk_message(text: str) -> dict:
-    return {**_base("assistant_chunk"), "text": text}
+def assistant_chunk_message(text: str, index: int) -> dict:
+    """index is the sentence's sequential position within the reply — lets
+    the frontend render each sentence as its own element and later match it
+    up against a speech_started event carrying the same index.
+    """
+    return {**_base("assistant_chunk"), "text": text, "index": index}
 
 
 def assistant_done_message() -> dict:
@@ -51,6 +66,24 @@ def confirmation_request_message(id_: str, prompt: str, risk: str, options: list
     if risk not in ("low", "high"):
         raise ValueError(f"Unknown risk level: {risk!r}")
     return {**_base("confirmation_request"), "id": id_, "prompt": prompt, "risk": risk, "options": options}
+
+
+def speech_started_message(index: int) -> dict:
+    """Fired right as TTS actually starts playing a given sentence (not when
+    it's generated/displayed, which happens well before playback catches up)
+    so the frontend can highlight exactly the sentence currently being
+    spoken instead of guessing from generation time or word-count timing.
+    """
+    return {**_base("speech_started"), "index": index}
+
+
+def confirmation_resolved_message(id_: str) -> dict:
+    """Tells the frontend a pending confirmation is no longer pending, so it
+    can hide the chip row — needed because a confirmation can be resolved by
+    voice (a spoken yes/no) as well as by clicking a chip, and only the chip
+    click path hides the UI on its own.
+    """
+    return {**_base("confirmation_resolved"), "id": id_}
 
 
 def briefing_message(text: str) -> dict:

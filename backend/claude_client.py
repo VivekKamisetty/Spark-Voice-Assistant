@@ -165,24 +165,39 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
         "what do you see", "what's this", "this ui", "this error"
     ]
     
+    screenshot_permission_denied = False
+
     if screenshot_enabled and any(kw in prompt.lower() for kw in visual_keywords):
         requires_image = True
         print("[Router] 📸 Screenshot requested, capturing...")
-        
+
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
                 screenshot_path = tmpfile.name
-            subprocess.run(["screencapture", "-x", screenshot_path])
-            
-            with open(screenshot_path, "rb") as f:
-                image_bytes = f.read()
-                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            
-            os.remove(screenshot_path)
-            print(f"[Router] 📸 Screenshot captured")
+            result = subprocess.run(["screencapture", "-x", screenshot_path], capture_output=True)
+
+            if result.returncode != 0 or os.path.getsize(screenshot_path) == 0:
+                # screencapture exits non-zero (or writes an empty file) when
+                # macOS hasn't granted this process Screen Recording
+                # permission (System Settings > Privacy & Security > Screen
+                # Recording) — that's a fixable permission gap, not a
+                # permanent "I can't see your screen" limitation, so it gets
+                # surfaced to Claude as its own condition rather than being
+                # silently treated the same as any other capture failure.
+                screenshot_permission_denied = True
+                requires_image = False
+                print(f"[Router] Screenshot permission likely denied (exit {result.returncode}): {result.stderr.decode(errors='replace').strip()}")
+            else:
+                with open(screenshot_path, "rb") as f:
+                    image_bytes = f.read()
+                    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                print(f"[Router] 📸 Screenshot captured")
         except Exception as e:
             print(f"[Router] Screenshot failed: {e}")
             requires_image = False
+        finally:
+            if os.path.exists(screenshot_path):
+                os.remove(screenshot_path)
 
     # Build messages
     messages = []
@@ -214,6 +229,18 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
                 }
             ]
         })
+    elif screenshot_permission_denied:
+        messages.append({
+            "role": "user",
+            "content": (
+                f"{prompt}\n\n"
+                "(System note: a screenshot could not be captured because "
+                "Spark hasn't been granted Screen Recording permission on "
+                "this Mac. Tell the user to grant it in System Settings > "
+                "Privacy & Security > Screen Recording, then ask again — "
+                "don't imply you're permanently unable to see the screen.)"
+            )
+        })
     else:
         messages.append({
             "role": "user",
@@ -233,7 +260,17 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
         "AppleScript calendar queries can take a while with several "
         "calendars; that's expected, so run them as a normal foreground "
         "command and wait for the result rather than backgrounding the "
-        "process or polling for it — the timeout is long enough to wait."
+        "process or polling for it — the timeout is long enough to wait.\n\n"
+        "Structure every reply as a short spoken-friendly headline first: "
+        "1-2 natural sentences that directly answer the question, the way "
+        "you'd say it out loud. Everything the user actually sees is the "
+        "full reply either way — this split only controls what gets "
+        "spoken aloud, since reading is faster than listening once the "
+        "detail is already on screen. If there's more worth including — a "
+        "list, code, elaboration, multiple facts — add a line containing "
+        "exactly ---DETAIL--- right after the headline, then the rest. If "
+        "the whole answer already fits in that short headline, skip the "
+        "marker and the detail section entirely."
     )
 
     def stream_call():

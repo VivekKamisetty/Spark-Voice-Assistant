@@ -1,246 +1,332 @@
-#bubble {
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  height: 100%;
+  background: transparent;
+}
+
+:root {
+  /* Set live from renderer.js on every state change (see onStateChange) —
+     this default only matters for the instant before the first state
+     message arrives. */
+  --state-glow-color: #8a7fd6;
+}
+
+#app {
   -webkit-app-region: no-drag;
-  position: fixed;
-  top: -80px;         /* distance from the top */
-  right: 10px;       /* distance from the right */
-  width: 75px;
-  height: 75px;
-  background-color: rgb(119, 99, 192); /* <-- white base */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ---------- Orb ---------- */
+
+#orb-wrap {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  margin-top: 12px;
+  flex-shrink: 0;
+  /* Ambient glow behind the orb itself, layered with the shader's own
+     fresnel glow for a stronger bloom-like effect without a full WebGL
+     postprocessing pipeline. */
+  filter: drop-shadow(0 0 18px rgba(140, 120, 255, 0.55));
+  transition: filter 0.6s ease;
+}
+
+#orb-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#stop-button {
+  -webkit-app-region: no-drag;
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  margin: 100px auto;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
-  opacity: 0;
-  transition: opacity 0.4s ease-in-out;
-  z-index: 9999;
-  
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-size: 11px;
-  text-align: center;
-  pointer-events: auto;
+  /* Hover-reveal: invisible until the pointer is actually over the orb, so
+     it doesn't clutter the resting orb with a control that's rarely needed. */
+  opacity: 0;
+  transition: opacity 0.2s ease, background-color 0.15s ease;
 }
 
-/* Show the bubble only after status appears */
-#bubble.show {
+#orb-wrap:hover #stop-button {
   opacity: 1;
 }
 
-/* Listening status: green pulse */
-#bubble.listening {
-  background-color: #4CAF50;
-  animation: pulse-listening 2s infinite;
+#stop-button:hover {
+  background: rgba(255, 82, 82, 0.5);
 }
 
-/* Thinking status: blue pulse */
-#bubble.thinking {
-  background-color: #2196F3;
-  animation: pulse-thinking 1.5s infinite;
-}
-
-/* Speaking status: yellow ripple */
-#bubble.speaking {
-  background-color: #FFC107;
-  animation: ripple-speaking 2s infinite;
-}
-
-/* Pulse animations */
-@keyframes pulse-listening {
-  0% { box-shadow: 0 0 10px #4CAF50; }
-  50% { box-shadow: 0 0 30px #4CAF50; }
-  100% { box-shadow: 0 0 10px #4CAF50; }
-}
-
-@keyframes pulse-thinking {
-  0% { box-shadow: 0 0 10px #2196F3; }
-  50% { box-shadow: 0 0 25px #2196F3; }
-  100% { box-shadow: 0 0 10px #2196F3; }
-}
-
-/* Ripple for speaking */
-@keyframes ripple-speaking {
-  0% {
-    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
-  }
-  70% {
-    box-shadow: 0 0 0 20px rgba(255, 193, 7, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
-  }
-}
-
-#spark-popup {
-  -webkit-app-region: no-drag;
-  position: fixed;
-  flex-direction: column;
-  display: flex;
-  left: 200px;
-  top: 100px;
+#stop-button.hidden {
   display: none;
-  flex-direction: column;
-  padding: 16px;
-  border-radius: 12px;
-  background: rgba(30, 30, 30, 0.9);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 14px;
-  line-height: 1.5;
-  z-index: 9999;
-  pointer-events: auto;
-  user-select: text;
-  max-width: 365px;
-  margin: 0 auto;
-
-  width: 60vw;
-  min-width: 300px;
-  height: 50vh;
-  min-height: 200px;
-  max-height: 465px;
-
-  resize: none;
-  overflow: hidden;
-  
-  /* ❌ No dragging */
 }
 
-#spark-popup.show {
-  display: flex;
-}
+/* ---------- Conversation panel ---------- */
+/* Height is spring-animated from JS (renderer.js), not a CSS transition —
+   real spring physics (weight, slight overshoot) rather than a linear/eased
+   fade, per the design brief. Opacity/color fades are fine as plain CSS. */
 
-#popup-content {
-flex: 1;
-display: flex;
-position: relative;
-flex-direction: column;
-height: 100%;
-/*overflow-y: auto;*/
-overflow: hidden;
-min-height: 0; /* ✅ critical to make flexbox calculate properly */
-}
-
-#spark-popup-text {
-flex: 1;
-padding: 16px;
-overflow-y: auto;
-font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-font-size: 15px;
-color: #f1f1f1;
-line-height: 1.6;
-overflow-y: auto;
-max-height: none;
-white-space: normal;
-padding-bottom: 48px;
-}
-
-#spark-popup-text code {
-background: #2e2e2e;
-color: #ffae00;
-padding: 2px 4px;
-border-radius: 4px;
-font-family: 'Fira Code', monospace;
-}
-
-/* Code blocks */
-#spark-popup-text pre {
-background-color: #2c2c2c;  /* Slightly lighter */
-border: 1px solid #444;
-color: #d4d4d4;
-border-radius: 6px;
-padding: 12px;
-overflow-x: auto;
-font-family: 'Fira Code', monospace;
-font-size: 14px;
-}
-
-#popup-footer {
-position: absolute;
-bottom: 0;
-left: 0;
-right: 0;
-background-color: rgba(30, 30, 30, 0.9);
-padding: 8px;
-display: flex;
-justify-content: flex-end;
-border-top: 1px solid rgba(30, 30, 30, 0.9);
-gap: 10px;
-flex-shrink: 0;
-z-index: 10;
-}
-
-/* Button styles */
-#spark-popup button {
-  padding: 6px 12px;
-  border-radius: 4px;
-  border: none;
-  background-color: rgba(255, 255, 255, 0.2);
-  color: white;
-  cursor: pointer;
-  transition: background-color 0.2s;
+#panel {
   -webkit-app-region: no-drag;
+  width: 340px;
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 18, 30, 0.55);
+  backdrop-filter: blur(20px);
+  border-radius: 20px;
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  /* Drop shadow for depth, a bright 1px specular line along the top inner
+     edge (the "light catching a glass rim" look), and a soft colored spill
+     glow from the top tinted with the orb's current state — set live via
+     the --state-glow-color custom property (see renderer.js onStateChange),
+     so light appears to spill from the orb onto the glass beneath it. */
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 24px 32px -28px var(--state-glow-color);
+  opacity: 0;
+  transition: opacity 0.25s ease, box-shadow 0.6s ease;
 }
 
-#spark-popup button:hover {
-  background-color: rgba(255, 255, 255, 0.3);
+#panel.visible {
+  opacity: 1;
 }
 
-/* Resize handle indicator */
-#spark-popup::after {
-content: "";
-position: absolute;
-bottom: 3px;
-right: 3px;
-width: 16px;
-height: 16px;
-pointer-events: none;
-background: rgba(255, 255, 255, 0.3);  /* ✅ visible */
-border-radius: 3px;
-cursor: nwse-resize;
-z-index: 10000; /* Ensure it’s on top */
+#transcript-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px 4px 16px;
+  min-height: 0;
 }
 
-html, body {
-margin: 0;
-padding: 0;
-overflow: hidden; /* prevent entire window scrolling */
-height: 100%;
+.message {
+  margin-bottom: 14px;
+  line-height: 1.5;
+  font-size: 14px;
+  animation: message-in 0.3s ease;
 }
 
-#popup-resize-grip {
-position: absolute;
-width: 20px;
-height: 20px;
-bottom: 0;
-right: 0;
-background: rgba(255, 255, 255, 0.5);
-cursor: nwse-resize;
-z-index: 100; /* Above ::after */
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
+.message.user {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: #dcd8f5;
+  text-align: right;
+}
 
-/* Add to your style.css */
+.message.user.partial {
+  color: #9c96c2;
+  font-style: italic;
+}
+
+.message.assistant {
+  font-family: Georgia, "Times New Roman", serif;
+  color: #f1f0f7;
+}
+
+.message.assistant .cursor {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  background: #f1f0f7;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.9s steps(1) infinite;
+}
+
+/* Each sentence is its own element (see renderer.js appendAssistantChunk) so
+   the one currently being spoken can be highlighted independently of ones
+   already spoken. display:inline (rather than the div's normal block) lets
+   consecutive plain-text sentences flow together as one paragraph; a
+   markdown chunk that's actually a list/code block still renders as block
+   content since only the wrapper and its <p> are forced inline below. */
+.message.assistant .sentence {
+  display: inline;
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+.message.assistant .sentence p {
+  display: inline;
+  margin: 0;
+}
+
+.message.assistant .sentence.sentence-dimmed {
+  opacity: 0.6;
+}
+
+.message.assistant .sentence.sentence-active {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px rgba(241, 240, 247, 0.6));
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+.message.assistant code {
+  background: #2e2e2e;
+  color: #ffae00;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9em;
+}
+
+.message.assistant pre {
+  background-color: #201f2b;
+  border: 1px solid #3a3850;
+  color: #d4d4d4;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+  font-family: 'Fira Code', monospace;
+  font-size: 13px;
+}
+
+#tool-activity {
+  padding: 0 16px 8px 16px;
+  font-size: 12px;
+  font-style: italic;
+  color: #9c96c2;
+}
+
+#tool-activity.hidden {
+  display: none;
+}
+
+/* ---------- Confirmation chips ---------- */
+
+#confirmation-chips {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 12px 16px;
+  flex-wrap: wrap;
+}
+
+#confirmation-chips.hidden {
+  display: none;
+}
+
+.chip {
+  -webkit-app-region: no-drag;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.chip.high-risk {
+  background: rgba(255, 82, 82, 0.25);
+  color: #ffb3b3;
+}
+
+.chip.high-risk:hover {
+  background: rgba(255, 82, 82, 0.4);
+}
+
+/* ---------- Typed input ---------- */
+
+#input-row {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+#text-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 7px 10px;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+
+#text-input::placeholder {
+  color: #8d88a8;
+}
+
+#copy-last-button {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 10px;
+  padding: 7px 12px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  /* Hover-reveal, matching the stop button — only appears once the pointer
+     is actually near the input row instead of always sitting there. */
+  opacity: 0;
+  transition: opacity 0.2s ease, background-color 0.15s ease;
+}
+
+#input-row:hover #copy-last-button {
+  opacity: 1;
+}
+
+#copy-last-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ---------- Syntax highlighting ---------- */
+
 .hljs {
-background: #1e1e1e;
-color: #e0e0e0;
-padding: 12px;
-border-radius: 8px;
-overflow-x: auto;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
 }
 .hljs-comment,
 .hljs-quote {
-color: #999;
-font-style: italic;
+  color: #999;
+  font-style: italic;
 }
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-subst {
-color: #ffae00;
+  color: #ffae00;
 }
 .hljs-string,
 .hljs-number,
 .hljs-built_in,
 .hljs-literal {
-color: #00d8ff;
+  color: #00d8ff;
 }

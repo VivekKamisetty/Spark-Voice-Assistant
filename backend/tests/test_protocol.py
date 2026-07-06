@@ -21,13 +21,20 @@ def test_state_message_rejects_unknown_value():
 
 
 def test_amplitude_message_shape():
-    msg = protocol.amplitude_message("mic", 0.42)
-    assert msg == {"v": 2, "type": "amplitude", "source": "mic", "rms": 0.42}
+    msg = protocol.amplitude_message("mic", 0.42, 0.1, 0.05)
+    assert msg == {
+        "v": 2,
+        "type": "amplitude",
+        "source": "mic",
+        "bass": 0.42,
+        "mid": 0.1,
+        "high": 0.05,
+    }
 
 
 def test_amplitude_message_rejects_unknown_source():
     with pytest.raises(ValueError):
-        protocol.amplitude_message("speaker", 0.1)
+        protocol.amplitude_message("speaker", 0.1, 0.1, 0.1)
 
 
 def test_transcript_message_defaults_partial_false():

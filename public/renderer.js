@@ -1,38 +1,24 @@
 const { marked } = require("marked");
 const hljs = require("highlight.js");
 const { ipcRenderer } = require('electron');
+const { createOrb, STATE_COLOR_HEX } = require('./orb.js');
 
-let lastStatus = "";
-let pendingAssistantText = "";
-
-// --- Setup Markdown + Code Highlighting ---
 marked.setOptions({
   highlight: (code) => hljs.highlightAuto(code).value
 });
 
-// --- Saved Dimensions ---
-let popupSettings = {
-  width: null,
-  height: null,
-  left: null,
-  top: null
-};
+const orb = createOrb(document.getElementById('orb-canvas'));
 
-// Try to load settings
-try {
-  const saved = localStorage.getItem('spark-popup-settings');
-  if (saved) popupSettings = JSON.parse(saved);
-} catch (e) {
-  console.error('[Spark UI] Failed to load popup settings:', e);
-}
+const WINDOW_WIDTH = 380; // must match src/main.js's WINDOW_WIDTH
 
 // --- WebSocket connection to the Python backend (protocol v2) ---
 const WS_URL = 'ws://localhost:8765';
 let reconnectDelay = 500;
 const MAX_RECONNECT_DELAY = 5000;
+let socket = null;
 
 function connectSparkSocket() {
-  const socket = new WebSocket(WS_URL);
+  socket = new WebSocket(WS_URL);
 
   socket.onopen = () => {
     console.log('[Spark UI] Connected to backend.');
@@ -60,169 +46,405 @@ function connectSparkSocket() {
   };
 }
 
+function sendToBackend(message) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
+  }
+}
+
+// --- Conversation state ---
+let lastState = "";
+let currentAssistantEl = null; // the <div class="message assistant"> currently streaming into
+let currentUserEl = null;
+let pendingConfirmationId = null;
+let idleCollapseTimer = null;
+
+const IDLE_COLLAPSE_MS = 8000;
+
 function handleSparkMessage(msg) {
   switch (msg.type) {
     case 'state':
-      if (msg.value !== lastStatus) {
-        lastStatus = msg.value;
-        updateBubble(msg.value);
+      if (msg.value !== lastState) {
+        lastState = msg.value;
+        orb.setState(msg.value);
+        onStateChange(msg.value);
       }
       break;
+
     case 'amplitude':
-      // Not consumed visually yet — the reactive orb lands in Phase 3.
-      // Logged here so Phase 0's acceptance check (amplitude visible in
-      // devtools while speaking) can be verified.
-      console.log('[Spark UI] amplitude', msg.source, msg.rms);
+      orb.setAmplitude(msg.bass, msg.mid, msg.high);
       break;
-    case 'assistant_chunk':
-      pendingAssistantText += msg.text;
-      break;
-    case 'assistant_done':
-      if (msg.show_popup && pendingAssistantText.trim().length > 0) {
-        showPopup(pendingAssistantText);
-      }
-      pendingAssistantText = "";
-      break;
+
     case 'transcript':
-    case 'tool_activity':
-    case 'confirmation_request':
-    case 'briefing':
-      // Not yet consumed by the UI — their features land in later phases.
-      console.log('[Spark UI]', msg.type, msg);
+      renderUserTranscript(msg.text, msg.partial);
       break;
+
+    case 'assistant_chunk':
+      appendAssistantChunk(msg.text, msg.index);
+      break;
+
+    case 'assistant_done':
+      finalizeAssistantMessage();
+      break;
+
+    case 'speech_started':
+      highlightSpokenSentence(msg.index);
+      break;
+
+    case 'tool_activity':
+      updateToolActivity(msg);
+      break;
+
+    case 'confirmation_request':
+      showConfirmationChips(msg);
+      break;
+
+    case 'confirmation_resolved':
+      hideConfirmationChips(msg.id);
+      break;
+
+    case 'briefing':
+      // Phase 6 feature — not wired up on the UI side yet.
+      console.log('[Spark UI] briefing', msg);
+      break;
+
     default:
       // Unknown message types are ignored gracefully, per protocol v2.
       break;
   }
 }
 
-// --- Update Bubble Status ---
-function updateBubble(status) {
-  const bubble = document.getElementById('bubble');
-  if (!bubble.classList.contains('show')) bubble.classList.add('show');
-  bubble.className = 'show'; // reset
-  bubble.textContent = '';
+function onStateChange(state) {
+  // Deliberately not expanding here for every state — that would unfold the
+  // panel on every idle "listening"/"calibrating" transition too. The panel
+  // should only open when there's actually something to show: a transcript
+  // starting (renderUserTranscript) or a confirmation prompt
+  // (showConfirmationChips) already call expandPanel() themselves.
+  scheduleIdleCollapse();
 
-  switch (status) {
-    case 'listening': bubble.classList.add('listening'); break;
-    case 'thinking': bubble.classList.add('thinking'); break;
-    case 'speaking': bubble.classList.add('speaking'); break;
-    case 'calibrating':
-      bubble.classList.add('thinking');
-      bubble.textContent = 'Calibrating...';
-      break;
+  // Tints the panel's top edge (see style.css) to match the orb's current
+  // state color, so light appears to spill from the orb onto the glass
+  // below it rather than the two looking like unrelated surfaces.
+  document.documentElement.style.setProperty(
+    '--state-glow-color',
+    STATE_COLOR_HEX[state] || STATE_COLOR_HEX.idle
+  );
+
+  const stopButton = document.getElementById('stop-button');
+  if (stopButton) stopButton.classList.toggle('hidden', state !== 'speaking');
+
+  if (state === 'listening') {
+    // A fresh turn is starting (or we've returned to rest) — clear the
+    // in-progress streaming bubble so the next reply starts its own.
+    currentAssistantEl = null;
+    currentUserEl = null;
   }
 }
 
-// --- Show Popup with Markdown/Code ---
-function showPopup(text) {
-  const popup = document.getElementById("spark-popup");
-  const popupText = document.getElementById("spark-popup-text");
+// --- Transcript rendering ---
 
-  // Set dimensions
-  if (popupSettings.width) popup.style.width = popupSettings.width;
-  if (popupSettings.height) popup.style.height = popupSettings.height;
-  if (popupSettings.left) popup.style.left = popupSettings.left;
-  if (popupSettings.top) popup.style.top = popupSettings.top;
-
-  popupText.innerHTML = marked.parse(text);
-  popup.classList.remove("hidden");
-  popup.classList.add("show");
-
+function getTranscriptContainer() {
+  return document.getElementById('transcript');
 }
 
-// --- Close Popup ---
-function closePopup() {
-  const popup = document.getElementById("spark-popup");
-  savePopupDimensions();
-  popup.classList.remove("show");
-  popup.classList.add("hidden");
-
+function renderUserTranscript(text, partial) {
+  const container = getTranscriptContainer();
+  if (!currentUserEl) {
+    currentUserEl = document.createElement('div');
+    currentUserEl.className = 'message user';
+    container.appendChild(currentUserEl);
+  }
+  currentUserEl.textContent = text;
+  currentUserEl.classList.toggle('partial', !!partial);
+  if (!partial) {
+    currentUserEl = null; // next transcript starts a new bubble
+  }
+  // Measuring content height for expandPanel() must happen after the new
+  // element is in the DOM, not before — otherwise it measures the
+  // pre-update (often near-empty) content and the panel never actually
+  // grows to fit anything.
+  expandPanel();
+  scrollTranscriptToBottom();
 }
 
-// --- Copy Button ---
-function copyPopupText(event) {
-  const text = document.getElementById("spark-popup-text").innerText;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = event.target;
-    const original = btn.innerText;
-    btn.innerText = "✓ Copied!";
-    setTimeout(() => (btn.innerText = original), 1500);
-  }).catch(err => {
-    console.error('Failed to copy:', err);
+// Tracks the highest sentence index that has actually been spoken so far in
+// the current reply (see highlightSpokenSentence) — needed at finalize time
+// to know which sentences to settle into "dimmed" vs. leave untouched (e.g.
+// a ---DETAIL--- section that was never spoken in "brief" voice mode
+// shouldn't dim just because the turn ended).
+let highestSpokenIndex = -1;
+
+function appendAssistantChunk(text, index) {
+  if (!currentAssistantEl) {
+    const container = getTranscriptContainer();
+    currentAssistantEl = document.createElement('div');
+    currentAssistantEl.className = 'message assistant';
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    currentAssistantEl.appendChild(cursor);
+    container.appendChild(currentAssistantEl);
+  }
+
+  const cursor = currentAssistantEl.querySelector('.cursor');
+  // A plain space between consecutive sentences: each one arrives already
+  // trimmed of surrounding whitespace (see backend/sentence_splitter.py), so
+  // without this they'd run together with no gap.
+  if (currentAssistantEl.querySelector('.sentence')) {
+    currentAssistantEl.insertBefore(document.createTextNode(' '), cursor);
+  }
+
+  // Each sentence gets its own element (rather than one re-parsed blob) so
+  // highlightSpokenSentence can dim/glow individual sentences as TTS
+  // actually plays through them. A div (not span) because marked.parse can
+  // legitimately produce block content (lists, code blocks) for a chunk —
+  // style.css makes it flow inline for the common plain-sentence case.
+  const sentenceEl = document.createElement('div');
+  sentenceEl.className = 'sentence';
+  sentenceEl.dataset.index = String(index);
+  sentenceEl.innerHTML = marked.parse(text);
+  currentAssistantEl.insertBefore(sentenceEl, cursor);
+
+  // Re-measure and grow the panel as the reply streams in and gets longer,
+  // not just once when the user's own message first opened it.
+  expandPanel();
+  scrollTranscriptToBottom();
+}
+
+function highlightSpokenSentence(index) {
+  if (!currentAssistantEl) return;
+  highestSpokenIndex = index;
+  currentAssistantEl.querySelectorAll('.sentence').forEach((el) => {
+    const i = Number(el.dataset.index);
+    el.classList.remove('sentence-active');
+    if (i < index) {
+      el.classList.add('sentence-dimmed');
+    } else if (i === index) {
+      el.classList.add('sentence-active');
+    }
   });
 }
 
-// --- Save Dimensions ---
-function savePopupDimensions() {
-  const popup = document.getElementById("spark-popup");
-  popupSettings = {
-    width: popup.style.width,
-    height: popup.style.height,
-    left: popup.style.left,
-    top: popup.style.top
-  };
-  try {
-    localStorage.setItem('spark-popup-settings', JSON.stringify(popupSettings));
-  } catch (e) {
-    console.error('[Spark UI] Failed to save popup settings:', e);
-  }
-}
-
-// --- ResizeObserver Setup ---
-document.addEventListener('DOMContentLoaded', () => {
-  const popup = document.getElementById("spark-popup");
-  const grip = document.getElementById("popup-resize-grip");
-
-  // Save size on change
-  const resizeObserver = new ResizeObserver(entries => {
-    for (let entry of entries) {
-      if (entry.target === popup) {
-        savePopupDimensions();
+function finalizeAssistantMessage() {
+  if (currentAssistantEl) {
+    const cursor = currentAssistantEl.querySelector('.cursor');
+    if (cursor) cursor.remove();
+    // Nothing is "currently being spoken" anymore once the turn is over —
+    // settle every sentence that was actually spoken into dimmed rather than
+    // leaving the last one stuck glowing. Sentences past highestSpokenIndex
+    // (e.g. an unspoken ---DETAIL--- section) are left at full brightness.
+    currentAssistantEl.querySelectorAll('.sentence').forEach((el) => {
+      const i = Number(el.dataset.index);
+      el.classList.remove('sentence-active');
+      if (i <= highestSpokenIndex) {
+        el.classList.add('sentence-dimmed');
       }
-    }
-  });
-  resizeObserver.observe(popup);
+    });
+  }
+  currentAssistantEl = null;
+  highestSpokenIndex = -1;
+  scheduleIdleCollapse();
+}
 
-  document.addEventListener('mousemove', (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const interactive = el && (el.closest('#spark-popup') || el.closest('#bubble'));
-    ipcRenderer.send('set-mouse-events', interactive);
+function scrollTranscriptToBottom() {
+  const scroll = document.getElementById('transcript-scroll');
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+// --- Tool activity ---
+
+function updateToolActivity(msg) {
+  const el = document.getElementById('tool-activity');
+  if (msg.status === 'running') {
+    el.textContent = msg.summary || `Running ${msg.name}…`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+// --- Confirmation chips ---
+
+function showConfirmationChips(msg) {
+  pendingConfirmationId = msg.id;
+  const container = document.getElementById('confirmation-chips');
+  container.innerHTML = '';
+
+  (msg.options || []).forEach((option) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (msg.risk === 'high' ? ' high-risk' : '');
+    chip.textContent = option;
+    chip.onclick = () => {
+      sendToBackend({ type: 'confirmation_response', id: pendingConfirmationId, choice: option });
+      container.classList.add('hidden');
+      container.innerHTML = '';
+      pendingConfirmationId = null;
+    };
+    container.appendChild(chip);
   });
 
-  // Only grip triggers resize
-  grip.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    const rect = popup.getBoundingClientRect();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startWidth = rect.width;
-    const startHeight = rect.height;
-  
-    function onMouseMove(ev) {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      const newWidth = startWidth + dx;
-      const newHeight = startHeight + dy;
-  
-      // Resize the DOM popup
-      popup.style.width = `${newWidth}px`;
-      popup.style.height = `${newHeight}px`;
-  
-      // Tell Electron to resize the actual window
-      //ipcRenderer.send('resize-window', { width: newWidth, height: newHeight});
+  container.classList.remove('hidden');
+  expandPanel();
+}
+
+function hideConfirmationChips(id) {
+  // A confirmation can be resolved by voice (a spoken yes/no), not just a
+  // chip click, so this has to be a separate handler the backend can
+  // trigger — otherwise chips resolved by voice stay stuck on screen
+  // forever since the click handler is the only other thing that hides them.
+  if (id && id !== pendingConfirmationId) return;
+  const container = document.getElementById('confirmation-chips');
+  container.classList.add('hidden');
+  container.innerHTML = '';
+  pendingConfirmationId = null;
+}
+
+// --- Panel expand/collapse (spring physics height animation) ---
+
+let panelHeight = 0;
+let panelVelocity = 0;
+let panelTargetHeight = 0;
+let springRunning = false;
+
+const SPRING_STIFFNESS = 210;
+const SPRING_DAMPING = 26;
+
+// The orb sits ORB_AREA_HEIGHT above the panel (orb-wrap height + its
+// margin-top + the panel's own margin-top from style.css), and the window
+// itself starts TOP_OFFSET down from the screen top (must match the `y` src
+// main.js positions the window at) — both needed to know how much vertical
+// room is actually left for the panel before it'd run off-screen.
+const TOP_OFFSET = 40;
+const ORB_AREA_HEIGHT = 160 + 12 + 10;
+const BOTTOM_MARGIN = 30;
+
+function maxPanelHeight() {
+  const available = window.screen.availHeight - TOP_OFFSET - ORB_AREA_HEIGHT - BOTTOM_MARGIN;
+  return Math.max(180, available);
+}
+
+function measureNaturalPanelHeight() {
+  // panel.scrollHeight is the wrong thing to measure here: #transcript-scroll
+  // is a flex child with its own `overflow-y: auto`, so once #panel's height
+  // is set, the flex algorithm sizes that child to fit within it and any
+  // extra transcript content is absorbed by ITS OWN internal scrolling —
+  // it never inflates #panel's scrollHeight. That's why the panel used to
+  // stay stuck small (showing only the tail of a long reply) no matter how
+  // much text streamed in. #transcript-scroll's own scrollHeight is what
+  // actually reflects the full, unclipped content height.
+  const transcriptScroll = document.getElementById('transcript-scroll');
+  const chips = document.getElementById('confirmation-chips');
+  const inputRow = document.getElementById('input-row');
+  const chipsHeight = chips.classList.contains('hidden') ? 0 : chips.offsetHeight;
+  return transcriptScroll.scrollHeight + chipsHeight + inputRow.offsetHeight;
+}
+
+function expandPanel() {
+  const panel = document.getElementById('panel');
+  panel.classList.add('visible');
+  // Capped by actual available screen space rather than a fixed number — a
+  // fixed cap (previously 420px) clips a normal multi-paragraph reply well
+  // before it runs out of real screen room to grow into.
+  panelTargetHeight = Math.min(maxPanelHeight(), Math.max(180, measureNaturalPanelHeight() || 300));
+  startSpring();
+}
+
+function collapsePanel() {
+  panelTargetHeight = 0;
+  startSpring();
+}
+
+function scheduleIdleCollapse() {
+  if (idleCollapseTimer) clearTimeout(idleCollapseTimer);
+  idleCollapseTimer = setTimeout(() => {
+    if (lastState === 'listening' || lastState === 'idle' || lastState === '') {
+      collapsePanel();
     }
-  
-    function onMouseUp() {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+  }, IDLE_COLLAPSE_MS);
+}
+
+function startSpring() {
+  if (springRunning) return;
+  springRunning = true;
+  let lastTime = performance.now();
+
+  function step(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.05);
+    lastTime = now;
+
+    const displacement = panelTargetHeight - panelHeight;
+    const springForce = displacement * SPRING_STIFFNESS;
+    const dampingForce = -panelVelocity * SPRING_DAMPING;
+    const acceleration = springForce + dampingForce;
+    panelVelocity += acceleration * dt;
+    panelHeight += panelVelocity * dt;
+
+    const panel = document.getElementById('panel');
+    const settled = Math.abs(displacement) < 0.5 && Math.abs(panelVelocity) < 0.5;
+    const clamped = settled ? panelTargetHeight : panelHeight;
+    panel.style.height = `${Math.max(0, clamped)}px`;
+    if (clamped <= 0.5) panel.classList.remove('visible');
+
+    resizeWindowToContent();
+
+    if (settled) {
+      panelHeight = panelTargetHeight;
+      panelVelocity = 0;
+      springRunning = false;
+      return;
     }
-  
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function resizeWindowToContent() {
+  const app = document.getElementById('app');
+  const height = Math.ceil(app.getBoundingClientRect().height) + 4;
+  ipcRenderer.send('resize-window', { width: WINDOW_WIDTH, height });
+}
+
+// --- Stop / interrupt button ---
+
+document.addEventListener('DOMContentLoaded', () => {
+  const stopButton = document.getElementById('stop-button');
+  stopButton.addEventListener('click', () => {
+    sendToBackend({ type: 'interrupt' });
   });
 });
 
+// --- Typed input ---
+
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('text-input');
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      // Rendered when the backend broadcasts it back as a transcript
+      // message (same path voice input uses), not optimistically here.
+      sendToBackend({ type: 'text_input', text: input.value.trim() });
+      input.value = '';
+    }
+  });
+
+  const copyButton = document.getElementById('copy-last-button');
+  copyButton.addEventListener('click', () => {
+    const messages = document.querySelectorAll('.message.assistant .text');
+    if (!messages.length) return;
+    const text = messages[messages.length - 1].innerText;
+    navigator.clipboard.writeText(text).then(() => {
+      const original = copyButton.textContent;
+      copyButton.textContent = '✓ Copied';
+      setTimeout(() => (copyButton.textContent = original), 1500);
+    }).catch((err) => console.error('[Spark UI] Failed to copy:', err));
+  });
+
+  // Mouse-region interactivity: click-through everywhere except the orb and
+  // panel, since the window itself has no border/frame to grab.
+  document.addEventListener('mousemove', (e) => {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const interactive = el && (el.closest('#panel') || el.closest('#orb-wrap'));
+    ipcRenderer.send('set-mouse-events', interactive);
+  });
+});
 
 // --- Connect to backend ---
 connectSparkSocket();

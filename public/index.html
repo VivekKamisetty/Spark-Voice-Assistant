@@ -7,16 +7,25 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css">
 </head>
 <body>
-  <div id="bubble"></div>
-  <div id="spark-popup" class="hidden">
-    <div id="popup-content">
-      <pre id="spark-popup-text"></pre>
-      <div id="popup-footer">
-        <button onclick="copyPopupText(event)">Copy</button>
-        <button onclick="closePopup()">❌ Close</button>
+  <div id="app">
+    <div id="orb-wrap">
+      <canvas id="orb-canvas"></canvas>
+      <button id="stop-button" class="hidden" title="Stop Spark">✕</button>
+    </div>
+
+    <div id="panel">
+      <div id="transcript-scroll">
+        <div id="transcript"></div>
+        <div id="tool-activity" class="hidden"></div>
+      </div>
+
+      <div id="confirmation-chips" class="hidden"></div>
+
+      <div id="input-row">
+        <input id="text-input" type="text" placeholder="Type a message…" autocomplete="off" />
+        <button id="copy-last-button" title="Copy Spark's last reply">Copy</button>
       </div>
     </div>
-    <div id="popup-resize-grip"></div>
   </div>
   <script src="renderer.js"></script>
 </body>

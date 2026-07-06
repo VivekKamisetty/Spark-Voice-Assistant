@@ -5,21 +5,29 @@ const path = require('path');
 let win;
 let sparkProcess = null;
 
+// Fixed width; only height changes between the compact orb and the
+// expanded panel, so the window's top-left corner never has to move and
+// the panel purely unfolds downward from a fixed orb position.
+const WINDOW_WIDTH = 380;
+const COMPACT_HEIGHT = 180;
+
 function createWindow() {
   const { screen } = require('electron');
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   win = new BrowserWindow({
-    width: 600,
-    height: 600,
-    x: width - 640,   // ⬅ positions properly near right edge
+    width: WINDOW_WIDTH,
+    height: COMPACT_HEIGHT,
+    x: width - WINDOW_WIDTH - 20,
     y: 40,
     frame: false,
     transparent: true,
+    vibrancy: 'under-window',    // real macOS frosted-glass blur behind the orb
+    roundedCorners: true,
     focusable: true,  // ✅ must be focusable to stay on top reliably
     skipTaskbar: true,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: false, // size is managed programmatically (see resize-window below)
     fullscreenable: false,        // ✅ for better macOS layering
     hasShadow: false,
     titleBarStyle: 'customButtonsOnHover',

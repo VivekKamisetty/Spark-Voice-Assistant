@@ -3,6 +3,7 @@ import subprocess
 import functools
 import threading
 import queue
+import uuid
 import mlx_whisper
 import sounddevice as sd
 import numpy as np
@@ -16,6 +17,7 @@ from claude_client import route_claude_reply as route_gpt_reply
 import ws_server
 import protocol
 import store
+import audio_bands
 from tts_engine import KokoroTTSEngine, Pyttsx3TTSEngine
 should_listen = True  # Global flag to pause listening during TTS
 import signal
@@ -26,13 +28,29 @@ import signal
 _db = None
 _session_id = None
 
+# Claude is prompted (see claude_client.py) to lead every reply with a short
+# spoken-friendly headline, then an optional ---DETAIL--- marker followed by
+# more text — full detail always reaches the panel either way, this only
+# controls how much of it also gets spoken aloud, since reading is faster
+# than listening once the detail's already on screen. "brief" (default)
+# speaks only the headline; "full" restores the old behavior of speaking
+# everything; "muted" speaks nothing. Manual override for whichever the
+# system-prompt heuristic gets wrong for a given user/context.
+DETAIL_MARKER = "---DETAIL---"
+VOICE_MODE = os.getenv("SPARK_VOICE_MODE", "brief").strip().lower()
+if VOICE_MODE not in ("full", "brief", "muted"):
+    VOICE_MODE = "brief"
+
 def write_status(status, text="", show_popup=False):
     # "inactive" predates the v2 spec's state enum; it means the same thing
     # as "idle" so it's translated here rather than widening VALID_STATES.
     protocol_state = "idle" if status == "inactive" else status
     ws_server.broadcast(protocol.state_message(protocol_state))
     if text:
-        ws_server.broadcast(protocol.assistant_chunk_message(text))
+        # Always a single standalone message (confirmation prompts, etc.),
+        # not part of a streamed multi-sentence reply, so there's no
+        # sentence sequence to index — index 0 is simply "the whole thing".
+        ws_server.broadcast(protocol.assistant_chunk_message(text, 0))
         done = protocol.assistant_done_message()
         done["show_popup"] = show_popup  # not in the v2 spec proper; Phase 3's
         # panel redesign replaces this flag with auto-unfold, kept for now so
@@ -190,8 +208,8 @@ def mic_listener(transcript_queue):
                 # without flooding the socket on every audio block.
                 now = time.time()
                 if now - last_amplitude_broadcast >= 1 / 30:
-                    rms = float(np.sqrt(np.mean(block ** 2)))
-                    ws_server.broadcast(protocol.amplitude_message("mic", rms))
+                    bass, mid, high = audio_bands.compute_bands(block, sample_rate)
+                    ws_server.broadcast(protocol.amplitude_message("mic", bass, mid, high))
                     last_amplitude_broadcast = now
 
                 if max_amplitude > vad_threshold and should_listen:  # Add "and should_listen" here
@@ -256,6 +274,11 @@ def mic_listener(transcript_queue):
                 print(f"[Whisper] Ignored low-confidence garbled transcription (temperature={max_temperature:.1f}): '{text}'")
             elif text:
                 print(f"[User] {text}")
+                # mlx-whisper only produces a full utterance after silence
+                # is detected, not incremental word-by-word results, so this
+                # is always the final transcript (partial=False) — there's
+                # no true partial/live ASR in this pipeline to stream yet.
+                ws_server.broadcast(protocol.transcript_message("user", text, partial=False))
                 transcript_queue.put(text)
             else:
                 print("[Whisper] No valid text transcribed.")
@@ -304,18 +327,46 @@ def speak_reply(text, show_popup=False):
     _post_speech_cleanup()
 
 
-def interrupt_watcher():
-    """Watches for an explicit interrupt from the frontend (tap-to-interrupt
-    — Phase 2 deliberately doesn't attempt voice barge-in, which would need
-    real echo cancellation Spark doesn't have; see docs/SPARK_V2_SPEC.md) and
-    stops whatever TTS is currently playing. Runs as its own thread since
-    main()'s loop is blocked on tts_engine.speak_stream() while TTS plays.
+# Set by main() while a confirmation prompt (e.g. clear-history) is pending,
+# so a confirmation_response WS message (a chip click) can resolve it just
+# like a spoken yes/no — "first response wins" between the two channels, per
+# docs/SPARK_V2_SPEC.md. None whenever nothing is pending, which also makes
+# a stale/late response naturally get ignored below (its id won't match).
+_pending_confirmation_id = None
+confirmation_response_queue = queue.Queue()
+
+
+def incoming_message_watcher(transcript_queue):
+    """Watches messages the frontend sends back over the WebSocket:
+    - interrupt: tap-to-interrupt (Phase 2) — stop whatever TTS is playing.
+    - text_input: typed fallback input — fed into the same queue voice
+      transcripts use, so it's processed identically either way.
+    - confirmation_response: resolves a pending confirmation (see above).
+    Runs as its own thread since main()'s loop blocks on
+    tts_engine.speak_stream() while TTS plays and can't poll this itself.
     """
     while True:
         msg = ws_server.incoming_queue.get()
-        if msg.get("type") == "interrupt":
+        msg_type = msg.get("type")
+
+        if msg_type == "interrupt":
             print("[Spark] 🛑 Interrupt received, stopping TTS.")
             tts_engine.stop()
+
+        elif msg_type == "text_input":
+            text = msg.get("text", "").strip()
+            if text:
+                print(f"[Spark] ⌨️ Typed input: {text}")
+                # Broadcast the same transcript message voice input produces,
+                # rather than having the frontend render its own typed text
+                # optimistically — one rendering path for both input methods
+                # instead of two that could drift apart.
+                ws_server.broadcast(protocol.transcript_message("user", text, partial=False))
+                transcript_queue.put(text)
+
+        elif msg_type == "confirmation_response":
+            if msg.get("id") == _pending_confirmation_id:
+                confirmation_response_queue.put(msg.get("choice", ""))
 
 
 def process_claude_turn(line, chat_history):
@@ -329,16 +380,43 @@ def process_claude_turn(line, chat_history):
     DONE = object()
     first_sentence = threading.Event()
     result = {}
+    past_detail_marker = False
+    chunk_index = -1
 
     def on_sentence(sentence):
+        nonlocal past_detail_marker, chunk_index
+        chunk_index += 1
+
         if not first_sentence.is_set():
             first_sentence.set()
             write_status("speaking")
             global should_listen
             should_listen = False  # Stop listening during TTS
             mute_microphone()
-        ws_server.broadcast(protocol.assistant_chunk_message(sentence))
-        sentence_queue.put(sentence)
+
+        # The panel always gets the full text (marker stripped) regardless of
+        # voice mode — only how much of it also gets queued for TTS depends
+        # on VOICE_MODE and whether we're still before the ---DETAIL--- split.
+        display_text = sentence
+        spoken_text = sentence
+
+        if not past_detail_marker and DETAIL_MARKER in sentence:
+            before, _, after = sentence.partition(DETAIL_MARKER)
+            display_text = before + after
+            spoken_text = before
+            past_detail_marker = True
+        elif past_detail_marker:
+            spoken_text = ""
+
+        if VOICE_MODE == "full":
+            spoken_text = display_text
+        elif VOICE_MODE == "muted":
+            spoken_text = ""
+
+        if display_text.strip():
+            ws_server.broadcast(protocol.assistant_chunk_message(display_text, chunk_index))
+        if spoken_text.strip():
+            sentence_queue.put((chunk_index, spoken_text))
 
     def run_claude():
         reply, model_used, tools_called = route_gpt_reply(
@@ -389,6 +467,7 @@ def process_claude_turn(line, chat_history):
 
 CLEAR_HISTORY_PHRASES = {"clear history", "clear my history", "clear the history"}
 CONFIRM_PHRASES = {"yes", "yeah", "yep", "confirm", "do it", "sure", "go ahead"}
+DECLINE_PHRASES = {"no", "nope", "don't", "do not", "cancel", "stop", "never mind"}
 
 
 def main():
@@ -400,19 +479,67 @@ def main():
     _session_id = store.start_session(_db)
     chat_history = store.load_recent_messages(_db, limit=20)
 
-    # This is deliberately a small, one-off yes/no state machine, not a
-    # general confirmation system — Phase 4 builds that (reusing the
-    # confirmation_request/confirmation_response protocol messages already
-    # defined in Phase 0) and this gets replaced with it then.
+    # This is deliberately a small, one-off yes/no state machine for exactly
+    # one command, not a general confirmation system — Phase 4 builds that
+    # (any risky action, not just this one) and this gets replaced with it
+    # then. It does use the real confirmation_request/confirmation_response
+    # protocol messages (defined in Phase 0), retrofitted here in Phase 3 so
+    # the frontend's confirmation chips have something real to resolve.
     pending_clear_confirmation = False
 
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
-    threading.Thread(target=interrupt_watcher, daemon=True).start()
+    threading.Thread(target=incoming_message_watcher, args=(transcript_queue,), daemon=True).start()
+
+    def resolve_clear_confirmation(answer_text):
+        # Found live: an unrelated stray transcript during the confirmation
+        # window (e.g. the mic picking up "thank you") used to be forced
+        # into a decision — treated as an implicit "no" if it didn't
+        # exactly match a yes-phrase. Beyond being annoying, that's a real
+        # safety problem in the other direction too: if ambient noise
+        # happens to produce a word that IS in CONFIRM_PHRASES (like "sure"
+        # or "yeah" — both plausible Whisper hallucinations), a destructive
+        # action could get confirmed without genuine intent. Only an
+        # explicit yes/no phrase resolves anything now; anything else is
+        # ignored and the confirmation stays pending.
+        global _pending_confirmation_id
+        nonlocal pending_clear_confirmation
+        normalized = answer_text.strip(".,!? ").lower()
+
+        if normalized in CONFIRM_PHRASES:
+            resolved_id = _pending_confirmation_id
+            pending_clear_confirmation = False
+            _pending_confirmation_id = None
+            store.clear_history(_db)
+            chat_history.clear()
+            print("[Spark] 🧹 Conversation history cleared.")
+            ws_server.broadcast(protocol.confirmation_resolved_message(resolved_id))
+            speak_reply("Done — I've cleared your conversation history.")
+            start_idle_timer(45)
+        elif normalized in DECLINE_PHRASES:
+            resolved_id = _pending_confirmation_id
+            pending_clear_confirmation = False
+            _pending_confirmation_id = None
+            ws_server.broadcast(protocol.confirmation_resolved_message(resolved_id))
+            speak_reply("Okay, I won't clear anything.")
+            start_idle_timer(45)
+        else:
+            print(f"[Spark] ⏭️ Ignored unrelated input while awaiting confirmation: {answer_text!r}")
 
     write_status("listening")
 
     while True:
+        # Checked before transcript_queue each loop so a chip click can
+        # resolve a pending confirmation exactly as fast as a spoken answer
+        # would — whichever channel produces a response first wins; the
+        # other is naturally ignored once _pending_confirmation_id is
+        # cleared (incoming_message_watcher only queues a response whose id
+        # still matches the currently-pending one).
+        if pending_clear_confirmation and not confirmation_response_queue.empty():
+            choice = confirmation_response_queue.get()
+            resolve_clear_confirmation(choice)
+            continue
+
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
             normalized_line = line.lower().strip()
@@ -423,20 +550,20 @@ def main():
             stripped_line = normalized_line.strip(".,!?")
 
             if pending_clear_confirmation:
-                pending_clear_confirmation = False
-                if stripped_line in CONFIRM_PHRASES:
-                    store.clear_history(_db)
-                    chat_history.clear()
-                    print("[Spark] 🧹 Conversation history cleared.")
-                    speak_reply("Done — I've cleared your conversation history.")
-                else:
-                    speak_reply("Okay, I won't clear anything.")
-                start_idle_timer(45)
+                resolve_clear_confirmation(stripped_line)
                 continue
 
             if stripped_line in CLEAR_HISTORY_PHRASES:
                 pending_clear_confirmation = True
+                global _pending_confirmation_id
+                _pending_confirmation_id = str(uuid.uuid4())
                 cancel_idle_timer()
+                ws_server.broadcast(protocol.confirmation_request_message(
+                    _pending_confirmation_id,
+                    "Are you sure you want to clear your conversation history?",
+                    risk="low",
+                    options=["Yes", "No"],
+                ))
                 speak_reply("Are you sure you want to clear your conversation history? Say yes to confirm.")
                 # speak_reply() ends in "listening" for the normal case, but
                 # we're now specifically waiting on a yes/no — the protocol

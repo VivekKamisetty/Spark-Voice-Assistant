@@ -12,6 +12,7 @@ import threading
 import numpy as np
 import sounddevice as sd
 
+import audio_bands
 import protocol
 import ws_server
 
@@ -22,6 +23,13 @@ class TTSEngine:
     so speech starts before the full reply has finished generating. Returns
     True if playback completed all chunks, False if stop() interrupted it
     (checked both between chunks and mid-chunk).
+
+    Each item in text_chunks is either a plain string (no sentence-index
+    tracking needed, e.g. speak_reply's fixed one-shot replies) or an
+    (index, text) tuple — when an index is given, a speech_started broadcast
+    fires right as that chunk starts playing, so the frontend can highlight
+    exactly the sentence currently being spoken rather than guessing from
+    when it was generated/displayed (which runs well ahead of playback).
     """
 
     def speak_stream(self, text_chunks) -> bool:
@@ -29,6 +37,12 @@ class TTSEngine:
 
     def stop(self) -> None:
         raise NotImplementedError
+
+    @staticmethod
+    def _unpack(item):
+        if isinstance(item, tuple):
+            return item
+        return None, item
 
 
 class KokoroTTSEngine(TTSEngine):
@@ -43,11 +57,14 @@ class KokoroTTSEngine(TTSEngine):
 
     def speak_stream(self, text_chunks) -> bool:
         self._interrupted.clear()
-        for text in text_chunks:
+        for item in text_chunks:
+            index, text = self._unpack(item)
             if self._interrupted.is_set():
                 return False
             if not text.strip():
                 continue
+            if index is not None:
+                ws_server.broadcast(protocol.speech_started_message(index))
             for result in self._pipeline(text, voice=self.VOICE):
                 if self._interrupted.is_set():
                     return False
@@ -56,8 +73,8 @@ class KokoroTTSEngine(TTSEngine):
         return True
 
     def _play(self, audio: np.ndarray) -> bool:
-        """Play one synthesized chunk, broadcasting amplitude in ~30Hz blocks
-        (matching the mic amplitude throttle) and checking for an interrupt
+        """Play one synthesized chunk, broadcasting band energy in ~30Hz
+        blocks (matching the mic throttle) and checking for an interrupt
         between blocks. Returns False if stopped mid-playback.
         """
         block_size = int(self.SAMPLE_RATE / 30)
@@ -77,8 +94,8 @@ class KokoroTTSEngine(TTSEngine):
                 outdata[len(chunk) :, 0] = 0
             position = end
 
-            rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) else 0.0
-            ws_server.broadcast(protocol.amplitude_message("tts", rms))
+            bass, mid, high = audio_bands.compute_bands(chunk, self.SAMPLE_RATE)
+            ws_server.broadcast(protocol.amplitude_message("tts", bass, mid, high))
 
             if position >= len(audio):
                 raise sd.CallbackStop()
@@ -114,11 +131,14 @@ class Pyttsx3TTSEngine(TTSEngine):
         import pyttsx3
 
         self._interrupted.clear()
-        for text in text_chunks:
+        for item in text_chunks:
+            index, text = self._unpack(item)
             if self._interrupted.is_set():
                 return False
             if not text.strip():
                 continue
+            if index is not None:
+                ws_server.broadcast(protocol.speech_started_message(index))
 
             # A fresh engine per utterance avoids a known pyttsx3/macOS issue
             # where the NSSpeechSynthesizer run loop silently stops producing

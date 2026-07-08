@@ -85,13 +85,13 @@ html, body {
 
 #panel {
   -webkit-app-region: no-drag;
+  position: relative;
   width: 340px;
   height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   background: rgba(20, 18, 30, 0.55);
-  backdrop-filter: blur(20px);
   border-radius: 20px;
   margin-top: 10px;
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -110,6 +110,40 @@ html, body {
 
 #panel.visible {
   opacity: 1;
+}
+
+/* Its own row above the scrollable transcript, not an overlay on top of
+   it — an absolutely-positioned button here would otherwise sit on top of
+   whatever's scrolled to the top of the transcript at any given moment,
+   permanently at risk of overlapping text rather than just on first paint. */
+#panel-header {
+  -webkit-app-region: no-drag;
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px 0 10px;
+  flex-shrink: 0;
+}
+
+#hide-panel-button {
+  -webkit-app-region: no-drag;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cfcbe6;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+#hide-panel-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 #transcript-scroll {

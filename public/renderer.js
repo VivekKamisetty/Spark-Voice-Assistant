@@ -57,9 +57,6 @@ let lastState = "";
 let currentAssistantEl = null; // the <div class="message assistant"> currently streaming into
 let currentUserEl = null;
 let pendingConfirmationId = null;
-let idleCollapseTimer = null;
-
-const IDLE_COLLAPSE_MS = 8000;
 
 function handleSparkMessage(msg) {
   switch (msg.type) {
@@ -119,8 +116,9 @@ function onStateChange(state) {
   // panel on every idle "listening"/"calibrating" transition too. The panel
   // should only open when there's actually something to show: a transcript
   // starting (renderUserTranscript) or a confirmation prompt
-  // (showConfirmationChips) already call expandPanel() themselves.
-  scheduleIdleCollapse();
+  // (showConfirmationChips) already call expandPanel() themselves. It also
+  // no longer auto-collapses on an idle timer (see collapsePanel) — once
+  // open, it stays open until the user hides it themselves.
 
   // Tints the panel's top edge (see style.css) to match the orb's current
   // state color, so light appears to spill from the orb onto the glass
@@ -150,6 +148,10 @@ function getTranscriptContainer() {
 function renderUserTranscript(text, partial) {
   const container = getTranscriptContainer();
   if (!currentUserEl) {
+    // Only the latest exchange is ever shown — clear the previous turn now
+    // that a new one is starting, rather than accumulating full history.
+    container.innerHTML = '';
+    currentAssistantEl = null;
     currentUserEl = document.createElement('div');
     currentUserEl.className = 'message user';
     container.appendChild(currentUserEl);
@@ -242,7 +244,6 @@ function finalizeAssistantMessage() {
   }
   currentAssistantEl = null;
   highestSpokenIndex = -1;
-  scheduleIdleCollapse();
 }
 
 function scrollTranscriptToBottom() {
@@ -331,11 +332,12 @@ function measureNaturalPanelHeight() {
   // stay stuck small (showing only the tail of a long reply) no matter how
   // much text streamed in. #transcript-scroll's own scrollHeight is what
   // actually reflects the full, unclipped content height.
+  const panelHeader = document.getElementById('panel-header');
   const transcriptScroll = document.getElementById('transcript-scroll');
   const chips = document.getElementById('confirmation-chips');
   const inputRow = document.getElementById('input-row');
   const chipsHeight = chips.classList.contains('hidden') ? 0 : chips.offsetHeight;
-  return transcriptScroll.scrollHeight + chipsHeight + inputRow.offsetHeight;
+  return panelHeader.offsetHeight + transcriptScroll.scrollHeight + chipsHeight + inputRow.offsetHeight;
 }
 
 function expandPanel() {
@@ -351,15 +353,6 @@ function expandPanel() {
 function collapsePanel() {
   panelTargetHeight = 0;
   startSpring();
-}
-
-function scheduleIdleCollapse() {
-  if (idleCollapseTimer) clearTimeout(idleCollapseTimer);
-  idleCollapseTimer = setTimeout(() => {
-    if (lastState === 'listening' || lastState === 'idle' || lastState === '') {
-      collapsePanel();
-    }
-  }, IDLE_COLLAPSE_MS);
 }
 
 function startSpring() {
@@ -398,8 +391,23 @@ function startSpring() {
 }
 
 function resizeWindowToContent() {
-  const app = document.getElementById('app');
-  const height = Math.ceil(app.getBoundingClientRect().height) + 4;
+  // #app is `height: 100%` (bound to the window's own current size), so
+  // neither its getBoundingClientRect().height nor its scrollHeight give
+  // the actual content size — both just mirror #app's own (window-sized)
+  // box, since content here is smaller than that box, not overflowing it.
+  // Using either was a runaway feedback loop: resize to (current window
+  // height + 4px buffer), which makes the window taller, which #app then
+  // reports as its new "current" size next frame, forever, growing
+  // +4px/frame for as long as the spring animation keeps running. Measuring
+  // the actual content elements' own rendered bounds — independent of
+  // #app's box — is the only way to break that loop.
+  const orbWrap = document.getElementById('orb-wrap');
+  const panel = document.getElementById('panel');
+  const contentBottom = Math.max(
+    orbWrap.getBoundingClientRect().bottom,
+    panel.getBoundingClientRect().bottom
+  );
+  const height = Math.ceil(contentBottom) + 4;
   ipcRenderer.send('resize-window', { width: WINDOW_WIDTH, height });
 }
 
@@ -407,8 +415,34 @@ function resizeWindowToContent() {
 
 document.addEventListener('DOMContentLoaded', () => {
   const stopButton = document.getElementById('stop-button');
-  stopButton.addEventListener('click', () => {
+  stopButton.addEventListener('click', (e) => {
+    e.stopPropagation(); // don't also trigger the orb's click-to-expand below
     sendToBackend({ type: 'interrupt' });
+  });
+});
+
+// --- Hide / show panel (manual, no more idle auto-collapse) ---
+
+document.addEventListener('DOMContentLoaded', () => {
+  const hideButton = document.getElementById('hide-panel-button');
+  hideButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    collapsePanel();
+  });
+
+  // Clicking the orb toggles the panel — hides it (including its background)
+  // when open, so the orb can sit small and out of the way instead of the
+  // panel occupying a big chunk of the screen by default; clicking again
+  // brings it back. panelTargetHeight (not the 'visible' class, which only
+  // clears once the collapse animation finishes) reflects current intent
+  // even mid-animation.
+  const orbCanvas = document.getElementById('orb-canvas');
+  orbCanvas.addEventListener('click', () => {
+    if (panelTargetHeight > 0) {
+      collapsePanel();
+    } else {
+      expandPanel();
+    }
   });
 });
 
@@ -427,7 +461,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const copyButton = document.getElementById('copy-last-button');
   copyButton.addEventListener('click', () => {
-    const messages = document.querySelectorAll('.message.assistant .text');
+    // Each assistant message is now built from per-sentence .sentence
+    // elements (see appendAssistantChunk) rather than a single .text span,
+    // so the whole .message.assistant's innerText is what to copy.
+    const messages = document.querySelectorAll('.message.assistant');
     if (!messages.length) return;
     const text = messages[messages.length - 1].innerText;
     navigator.clipboard.writeText(text).then(() => {

@@ -156,10 +156,15 @@ const FRAGMENT_SHADER = `
     // the classic glowing-rim look. Sampled at three slightly different
     // exponents per channel below to fake chromatic aberration at the rim
     // without a texture/UV-offset (there's no texture here to offset).
+    // Lower exponents than a typical fresnel rim (was 2.0/2.2/2.45) — at
+    // that steepness only a thin sliver right at the silhouette is bright,
+    // and with the inner core mesh now sitting inside it, that thin sliver
+    // reads as "mostly dark body with a faint edge" rather than a rim that
+    // clearly dominates the surface.
     float fresnelBase = max(dot(viewDir, vNormal), 0.0);
-    float fresnelR = pow(1.0 - fresnelBase, 2.0);
-    float fresnelG = pow(1.0 - fresnelBase, 2.2);
-    float fresnelB = pow(1.0 - fresnelBase, 2.45);
+    float fresnelR = pow(1.0 - fresnelBase, 1.1);
+    float fresnelG = pow(1.0 - fresnelBase, 1.3);
+    float fresnelB = pow(1.0 - fresnelBase, 1.5);
     float fresnel = fresnelG;
 
     // Subtle iridescent sheen: a slow hue drift, strongest at the rim, so
@@ -168,10 +173,14 @@ const FRAGMENT_SHADER = `
     float iridAngle = sin(uTime * 0.35 + vDisplacement * 3.0) * 0.35 * fresnel;
     vec3 iridColor = hueRotate(uColor, iridAngle);
 
-    vec3 core = iridColor * 0.55;
-    vec3 rimR = iridColor + vec3(0.35 + uChroma, 0.35, 0.35);
-    vec3 rimG = iridColor + vec3(0.35, 0.35 + uChroma * 0.4, 0.35);
-    vec3 rimB = iridColor + vec3(0.35, 0.35, 0.35 + uChroma);
+    // Was 0.55 -- with the wider fresnel band above, the face-on area covers
+    // more of the visible disc, so it needs to be less dark itself or the
+    // rim brightening reads as a small highlight rather than the dominant
+    // "glowing membrane" look.
+    vec3 core = iridColor * 0.75;
+    vec3 rimR = iridColor + vec3(0.4 + uChroma, 0.4, 0.4);
+    vec3 rimG = iridColor + vec3(0.4, 0.4 + uChroma * 0.4, 0.4);
+    vec3 rimB = iridColor + vec3(0.4, 0.4, 0.4 + uChroma);
 
     vec3 color;
     color.r = mix(core.r, rimR.r, fresnelR) * uGlow;

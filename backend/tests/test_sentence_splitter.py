@@ -41,3 +41,15 @@ def test_decimal_number_does_not_split():
     # sentence boundary.
     result = list(split_into_sentences(deltas("The value is 3.5 exactly.")))
     assert result == ["The value is 3.5 exactly."]
+
+
+def test_numbered_list_marker_does_not_split():
+    # "1. " / "2. " looks identical to an abbreviated sentence end to this
+    # heuristic -- splitting there would tear the list marker away from its
+    # own item text, corrupting the list's markdown syntax before it ever
+    # reaches the renderer.
+    text = "Top items:\n1. **First** thing\n2. **Second** thing\n3. Done overall."
+    result = list(split_into_sentences(deltas(text)))
+    assert result == [
+        "Top items:\n1. **First** thing\n2. **Second** thing\n3. Done overall."
+    ]

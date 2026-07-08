@@ -22,6 +22,7 @@ function createWindow() {
     y: 40,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     vibrancy: 'under-window',    // real macOS frosted-glass blur behind the orb
     roundedCorners: true,
     focusable: true,  // ✅ must be focusable to stay on top reliably

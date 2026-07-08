@@ -16,6 +16,14 @@ BOUNDARY_WHITESPACE = " \n\t"
 def _find_boundary(buffer: str):
     for i, ch in enumerate(buffer):
         if ch in SENTENCE_END_CHARS and i + 1 < len(buffer) and buffer[i + 1] in BOUNDARY_WHITESPACE:
+            # "1. " / "2. " (a numbered list marker) looks identical to an
+            # abbreviated sentence end to this heuristic — splitting there
+            # tears the marker away from its own item text ("1." in one
+            # chunk, "**Item**..." in the next), corrupting the list's
+            # markdown syntax before it ever reaches the renderer. A real
+            # sentence essentially never ends on a bare digit, so skip it.
+            if ch == "." and i > 0 and buffer[i - 1].isdigit():
+                continue
             return i + 1
     return None
 

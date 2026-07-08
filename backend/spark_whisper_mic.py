@@ -3,7 +3,6 @@ import subprocess
 import functools
 import threading
 import queue
-import uuid
 import mlx_whisper
 import sounddevice as sd
 import numpy as np
@@ -18,8 +17,9 @@ import ws_server
 import protocol
 import store
 import audio_bands
+import confirmation_gate
+import mic_control
 from tts_engine import KokoroTTSEngine, Pyttsx3TTSEngine
-should_listen = True  # Global flag to pause listening during TTS
 import signal
 
 # Set once main() starts a session; cleanup_before_exit() needs them to close
@@ -92,7 +92,7 @@ def cancel_idle_timer():
 def cleanup_before_exit():
     print("[Spark] 🧼 Cleaning up before shutdown...")
     try:
-        unmute_microphone()
+        mic_control.unmute_microphone()
     except Exception as e:
         print(f"[Spark] ⚠️ Failed to unmute: {e}")
     if _db is not None and _session_id is not None:
@@ -154,12 +154,6 @@ max_recording_time = 10.0  # Hard cap so a noisy room can't keep the recorder op
 
 q = queue.Queue()
 
-def mute_microphone():
-    subprocess.run(['osascript', '-e', 'set volume input volume 0'])
-
-def unmute_microphone():
-    subprocess.run(['osascript', '-e', 'set volume input volume 100'])
-
 def audio_callback(indata, frames, time_info, status):
     #print(f"[Audio] callback fired with {len(indata)} frames")
     if status:
@@ -174,6 +168,19 @@ def get_device_id_by_name(name_keyword):
             return i
     print("[Spark] ❌ Mic keyword not found, falling back to default device #0")
     return 0
+
+# Whisper reliably hallucinates these exact filler words on quiet/noisy
+# clips with no real speech in them (see the no_speech_prob/temperature
+# checks below for the more reliable signal this backs up). Shared at
+# module level so mic_listener can skip ever displaying one as a fake user
+# turn, not just skip acting on it once it's already in transcript_queue —
+# broadcasting it first and filtering later meant a stray "Thank you." could
+# wipe the panel's now-latest-exchange-only view of a real conversation
+# with nothing, since nothing ever replies to it.
+POLITE_PHRASES = {
+    "thank you", "thanks", "i'm sorry", "sorry", "ok", "okay", "cool", "yep", "yes", "no", "all right"
+}
+
 
 def mic_listener(transcript_queue):
     try:
@@ -212,13 +219,26 @@ def mic_listener(transcript_queue):
                     ws_server.broadcast(protocol.amplitude_message("mic", bass, mid, high))
                     last_amplitude_broadcast = now
 
-                if max_amplitude > vad_threshold and should_listen:  # Add "and should_listen" here
+                if max_amplitude > vad_threshold and mic_control.should_listen:
                     audio_data.append(block)
                     if not speech_detected:
                         speech_start_time = time.time()
                     speech_detected = True
                     silence_timer = None
                 elif speech_detected:
+                    # Found live: short single-syllable words like "yes"/"no"
+                    # (exactly what voice confirmations need) often trail off
+                    # in volume fast enough to dip back under vad_threshold
+                    # well before the word is actually finished — previously
+                    # only over-threshold blocks were appended, so the clip
+                    # got truncated to just the loudest fragment (a handful
+                    # of ms) instead of the whole word, and then got thrown
+                    # out entirely by the "too short to be speech" floor
+                    # below. Keep appending through the quieter tail too,
+                    # for as long as we're still within the silence grace
+                    # period — only actually stop once max_silence_time of
+                    # true silence has passed.
+                    audio_data.append(block)
                     if silence_timer is None:
                         silence_timer = time.time()
                     elif time.time() - silence_timer > max_silence_time:
@@ -235,6 +255,25 @@ def mic_listener(transcript_queue):
                 continue
 
             audio_data = np.concatenate(audio_data, axis=0)
+
+            # Found live: capturing through the full silence grace period
+            # above (fixing short words like "yes" getting truncated to
+            # nothing) means a quick word is now followed by up to a full
+            # second of near-silent tail audio. That padding made the clip
+            # mostly silence by volume, which pushed Whisper toward its
+            # classic hallucination on quiet clips ("Thank you.") instead of
+            # actually transcribing the short word — trim back down to a
+            # small buffer after the last genuinely loud moment.
+            _ANALYSIS_WINDOW = max(1, int(0.05 * sample_rate))  # ~50ms
+            _TRAILING_PAD = int(0.2 * sample_rate)  # keep ~200ms of tail context
+            last_loud_end = 0
+            for i in range(0, len(audio_data), _ANALYSIS_WINDOW):
+                chunk = audio_data[i:i + _ANALYSIS_WINDOW]
+                if len(chunk) and np.max(np.abs(chunk)) > vad_threshold:
+                    last_loud_end = i + len(chunk)
+            if last_loud_end > 0:
+                audio_data = audio_data[: min(len(audio_data), last_loud_end + _TRAILING_PAD)]
+
             max_val = np.max(np.abs(audio_data), axis=0)
             if max_val > 0:
                 audio_data = audio_data / max_val
@@ -272,6 +311,16 @@ def mic_listener(transcript_queue):
                 print(f"[Whisper] Ignored likely hallucination (no_speech_prob={avg_no_speech_prob:.2f}): '{text}'")
             elif max_temperature >= 0.8:
                 print(f"[Whisper] Ignored low-confidence garbled transcription (temperature={max_temperature:.1f}): '{text}'")
+            elif not confirmation_gate.is_pending() and text.strip().lower().strip(".,!?") in POLITE_PHRASES:
+                # Skip displaying this at all, not just skip acting on it —
+                # broadcasting it unconditionally and filtering only once it
+                # reached transcript_queue (as before) meant a stray "Thank
+                # you." still visibly wiped the panel's now-latest-exchange
+                # view of a real conversation, with nothing ever replying to
+                # it. Only applies when nothing's pending: "yes"/"no" must
+                # still get through (and get displayed) to actually resolve a
+                # confirmation — see the branch below.
+                print(f"[Spark] 🙏 Ignored polite-only phrase (not shown): '{text}'")
             elif text:
                 print(f"[User] {text}")
                 # mlx-whisper only produces a full utterance after silence
@@ -279,7 +328,14 @@ def mic_listener(transcript_queue):
                 # is always the final transcript (partial=False) — there's
                 # no true partial/live ASR in this pipeline to stream yet.
                 ws_server.broadcast(protocol.transcript_message("user", text, partial=False))
-                transcript_queue.put(text)
+                # A confirmation (clear-history, or now a tool-call risk gate
+                # running on a background thread) is resolved here directly
+                # rather than via transcript_queue — main()'s own loop isn't
+                # necessarily free to poll it, e.g. while blocked waiting on
+                # a tool call, so this has to work regardless of what else is
+                # going on.
+                if not confirmation_gate.offer_voice_text(text):
+                    transcript_queue.put(text)
             else:
                 print("[Whisper] No valid text transcribed.")
 
@@ -288,7 +344,6 @@ def _post_speech_cleanup():
     interrupted: drain any audio that leaked in while muted, unmute, and
     resume listening.
     """
-    global should_listen
     # Small safety buffer for audio hardware drain. Not needed while the
     # engine is actively synthesizing/playing further chunks, only once
     # speech has actually stopped (natural end or interrupt).
@@ -302,8 +357,7 @@ def _post_speech_cleanup():
         except queue.Empty:
             break
 
-    unmute_microphone()
-    should_listen = True  # Resume listening
+    mic_control.unmute_microphone()
     # mic_listener's own loop only re-broadcasts "listening" once it next
     # breaks out of its capture loop, which can't happen while should_listen
     # was False — so the state would otherwise be stuck showing "speaking"
@@ -320,28 +374,21 @@ def speak_reply(text, show_popup=False):
     """
     write_status("speaking", text=text, show_popup=show_popup)
 
-    global should_listen
-    should_listen = False  # Stop listening during TTS
-    mute_microphone()
+    mic_control.mute_microphone()
     tts_engine.speak_stream(iter([text]))
     _post_speech_cleanup()
-
-
-# Set by main() while a confirmation prompt (e.g. clear-history) is pending,
-# so a confirmation_response WS message (a chip click) can resolve it just
-# like a spoken yes/no — "first response wins" between the two channels, per
-# docs/SPARK_V2_SPEC.md. None whenever nothing is pending, which also makes
-# a stale/late response naturally get ignored below (its id won't match).
-_pending_confirmation_id = None
-confirmation_response_queue = queue.Queue()
 
 
 def incoming_message_watcher(transcript_queue):
     """Watches messages the frontend sends back over the WebSocket:
     - interrupt: tap-to-interrupt (Phase 2) — stop whatever TTS is playing.
     - text_input: typed fallback input — fed into the same queue voice
-      transcripts use, so it's processed identically either way.
-    - confirmation_response: resolves a pending confirmation (see above).
+      transcripts use, so it's processed identically either way, unless a
+      confirmation is pending (see confirmation_gate.py), in which case it
+      resolves that instead of starting a new turn.
+    - confirmation_response: resolves a pending confirmation (a chip click) —
+      see confirmation_gate.py. "First response wins" between a chip click
+      and a spoken/typed yes-or-no, per docs/SPARK_V2_SPEC.md.
     Runs as its own thread since main()'s loop blocks on
     tts_engine.speak_stream() while TTS plays and can't poll this itself.
     """
@@ -362,11 +409,11 @@ def incoming_message_watcher(transcript_queue):
                 # optimistically — one rendering path for both input methods
                 # instead of two that could drift apart.
                 ws_server.broadcast(protocol.transcript_message("user", text, partial=False))
-                transcript_queue.put(text)
+                if not confirmation_gate.offer_voice_text(text):
+                    transcript_queue.put(text)
 
         elif msg_type == "confirmation_response":
-            if msg.get("id") == _pending_confirmation_id:
-                confirmation_response_queue.put(msg.get("choice", ""))
+            confirmation_gate.offer_response(msg.get("id"), msg.get("choice", ""))
 
 
 def process_claude_turn(line, chat_history):
@@ -374,7 +421,7 @@ def process_claude_turn(line, chat_history):
     thread so its streamed sentences can be spoken as they arrive rather than
     waiting for the complete reply, while the calling (main) thread feeds
     those sentences to the TTS engine as they're produced. Returns
-    (reply_text, model_used, tools_called).
+    (reply_text, model_used, tools_called, tool_calls_log).
     """
     sentence_queue = queue.Queue()
     DONE = object()
@@ -390,9 +437,7 @@ def process_claude_turn(line, chat_history):
         if not first_sentence.is_set():
             first_sentence.set()
             write_status("speaking")
-            global should_listen
-            should_listen = False  # Stop listening during TTS
-            mute_microphone()
+            mic_control.mute_microphone()
 
         # The panel always gets the full text (marker stripped) regardless of
         # voice mode — only how much of it also gets queued for TTS depends
@@ -419,12 +464,13 @@ def process_claude_turn(line, chat_history):
             sentence_queue.put((chunk_index, spoken_text))
 
     def run_claude():
-        reply, model_used, tools_called = route_gpt_reply(
+        reply, model_used, tools_called, tool_calls_log = route_gpt_reply(
             line, chat_history, screenshot_enabled=True, on_sentence=on_sentence
         )
         result["reply"] = reply
         result["model_used"] = model_used
         result["tools_called"] = tools_called
+        result["tool_calls_log"] = tool_calls_log
         sentence_queue.put(DONE)
 
     claude_thread = threading.Thread(target=run_claude, daemon=True)
@@ -462,84 +508,28 @@ def process_claude_turn(line, chat_history):
         # sentence streamed) — still need to return to listening.
         write_status("listening")
 
-    return reply, result["model_used"], result["tools_called"]
+    return reply, result["model_used"], result["tools_called"], result["tool_calls_log"]
 
 
 CLEAR_HISTORY_PHRASES = {"clear history", "clear my history", "clear the history"}
-CONFIRM_PHRASES = {"yes", "yeah", "yep", "confirm", "do it", "sure", "go ahead"}
-DECLINE_PHRASES = {"no", "nope", "don't", "do not", "cancel", "stop", "never mind"}
 
 
 def main():
     print("[Spark] Starting up with VAD and hotkeys...")
-    unmute_microphone()
+    mic_control.unmute_microphone()
 
     global _db, _session_id
     _db = store.init_db()
     _session_id = store.start_session(_db)
     chat_history = store.load_recent_messages(_db, limit=20)
 
-    # This is deliberately a small, one-off yes/no state machine for exactly
-    # one command, not a general confirmation system — Phase 4 builds that
-    # (any risky action, not just this one) and this gets replaced with it
-    # then. It does use the real confirmation_request/confirmation_response
-    # protocol messages (defined in Phase 0), retrofitted here in Phase 3 so
-    # the frontend's confirmation chips have something real to resolve.
-    pending_clear_confirmation = False
-
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
     threading.Thread(target=incoming_message_watcher, args=(transcript_queue,), daemon=True).start()
 
-    def resolve_clear_confirmation(answer_text):
-        # Found live: an unrelated stray transcript during the confirmation
-        # window (e.g. the mic picking up "thank you") used to be forced
-        # into a decision — treated as an implicit "no" if it didn't
-        # exactly match a yes-phrase. Beyond being annoying, that's a real
-        # safety problem in the other direction too: if ambient noise
-        # happens to produce a word that IS in CONFIRM_PHRASES (like "sure"
-        # or "yeah" — both plausible Whisper hallucinations), a destructive
-        # action could get confirmed without genuine intent. Only an
-        # explicit yes/no phrase resolves anything now; anything else is
-        # ignored and the confirmation stays pending.
-        global _pending_confirmation_id
-        nonlocal pending_clear_confirmation
-        normalized = answer_text.strip(".,!? ").lower()
-
-        if normalized in CONFIRM_PHRASES:
-            resolved_id = _pending_confirmation_id
-            pending_clear_confirmation = False
-            _pending_confirmation_id = None
-            store.clear_history(_db)
-            chat_history.clear()
-            print("[Spark] 🧹 Conversation history cleared.")
-            ws_server.broadcast(protocol.confirmation_resolved_message(resolved_id))
-            speak_reply("Done — I've cleared your conversation history.")
-            start_idle_timer(45)
-        elif normalized in DECLINE_PHRASES:
-            resolved_id = _pending_confirmation_id
-            pending_clear_confirmation = False
-            _pending_confirmation_id = None
-            ws_server.broadcast(protocol.confirmation_resolved_message(resolved_id))
-            speak_reply("Okay, I won't clear anything.")
-            start_idle_timer(45)
-        else:
-            print(f"[Spark] ⏭️ Ignored unrelated input while awaiting confirmation: {answer_text!r}")
-
     write_status("listening")
 
     while True:
-        # Checked before transcript_queue each loop so a chip click can
-        # resolve a pending confirmation exactly as fast as a spoken answer
-        # would — whichever channel produces a response first wins; the
-        # other is naturally ignored once _pending_confirmation_id is
-        # cleared (incoming_message_watcher only queues a response whose id
-        # still matches the currently-pending one).
-        if pending_clear_confirmation and not confirmation_response_queue.empty():
-            choice = confirmation_response_queue.get()
-            resolve_clear_confirmation(choice)
-            continue
-
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
             normalized_line = line.lower().strip()
@@ -549,26 +539,26 @@ def main():
             # them would ever match real transcribed speech.
             stripped_line = normalized_line.strip(".,!?")
 
-            if pending_clear_confirmation:
-                resolve_clear_confirmation(stripped_line)
-                continue
-
             if stripped_line in CLEAR_HISTORY_PHRASES:
-                pending_clear_confirmation = True
-                global _pending_confirmation_id
-                _pending_confirmation_id = str(uuid.uuid4())
                 cancel_idle_timer()
-                ws_server.broadcast(protocol.confirmation_request_message(
-                    _pending_confirmation_id,
-                    "Are you sure you want to clear your conversation history?",
+                # request_confirmation blocks this loop until resolved (chip
+                # click or spoken/typed yes-no) or it times out — fine here,
+                # since mic_listener routes voice input to it directly and
+                # doesn't need this loop to be free to poll anything.
+                confirmed = confirmation_gate.request_confirmation(
+                    "Are you sure you want to clear your conversation history? Say yes to confirm.",
                     risk="low",
                     options=["Yes", "No"],
-                ))
-                speak_reply("Are you sure you want to clear your conversation history? Say yes to confirm.")
-                # speak_reply() ends in "listening" for the normal case, but
-                # we're now specifically waiting on a yes/no — the protocol
-                # already has a state for exactly this.
-                write_status("awaiting_confirmation")
+                    speak_fn=speak_reply,
+                )
+                if confirmed:
+                    store.clear_history(_db)
+                    chat_history.clear()
+                    print("[Spark] 🧹 Conversation history cleared.")
+                    speak_reply("Done — I've cleared your conversation history.")
+                else:
+                    speak_reply("Okay, I won't clear anything.")
+                start_idle_timer(45)
                 continue
 
             # ✅ Ignore empty/noise-only transcriptions (e.g. just punctuation)
@@ -579,12 +569,9 @@ def main():
                 write_status("listening")
                 continue
 
-            # ✅ Ignore polite phrases
-            polite_phrases = {
-                "thank you", "thanks", "i'm sorry", "sorry", "ok", "okay", "cool", "yep", "yes", "no", "all right"
-            }
-
-            if stripped_line in polite_phrases:
+            # ✅ Ignore polite phrases (typed input only reaches here — voice
+            # input is already filtered earlier, before display, in mic_listener)
+            if stripped_line in POLITE_PHRASES:
                 print(f"[Spark] 🙏 Ignored polite-only phrase: '{line}'")
                 write_status("listening")
                 continue
@@ -596,13 +583,20 @@ def main():
 
             write_status("thinking")
             cancel_idle_timer()
-            reply, model_used, tools_called = process_claude_turn(line, chat_history)
+            reply, model_used, tools_called, tool_calls_log = process_claude_turn(line, chat_history)
 
             print(f"[Spark] [GPT] {reply}")
             chat_history.append({"role": "assistant", "content": reply})
             store.add_message(_db, _session_id, "assistant", reply)
-            if tools_called:
-                store.add_message(_db, _session_id, "tool", f"Used tools: {', '.join(tools_called)}")
+            # Each actual command/call + its real result, not just which tool
+            # names got used — needed to have a real audit trail of what
+            # Spark actually did on this machine, not just that it did
+            # "something" with execute_shell_command at some point.
+            for call in tool_calls_log:
+                store.add_message(
+                    _db, _session_id, "tool",
+                    f"{call['summary']} -> {call['result'][:200]}"
+                )
 
             start_idle_timer(45)
 

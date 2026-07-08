@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 import ws_server
 import protocol
+import confirmation_gate
+import risk_classifier
 from sentence_splitter import split_into_sentences
 
 load_dotenv()
@@ -74,8 +76,29 @@ TOOLS = [
 ]
 
 
-def execute_shell_command(command: str) -> str:
-    """Execute a shell command and return output."""
+def execute_shell_command(command: str, on_sentence=None) -> str:
+    """Execute a shell command and return output. Commands not confidently
+    recognized as safe (risk_classifier.py) require confirmation first —
+    declined or timed-out confirmations are not run at all. This is the gate
+    that was missing entirely before Phase 4: earlier in this project, a
+    misheard "yes" let Claude use this exact tool to kill Spark's own
+    Electron process with zero confirmation.
+
+    on_sentence, if given, is the same streaming callback used for regular
+    replies (see route_claude_reply) — passing it through here rather than
+    speaking separately means the confirmation prompt is fed through the one
+    active TTS consumer instead of opening a second, concurrent one.
+    """
+    if risk_classifier.needs_confirmation(command):
+        confirmed = confirmation_gate.request_confirmation(
+            f"Should I run this: {command}",
+            risk="high",
+            options=["Yes", "No"],
+            speak_fn=on_sentence,
+        )
+        if not confirmed:
+            return f"Not run — the user did not confirm: {command}"
+
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=SHELL_COMMAND_TIMEOUT)
         return result.stdout[:500] if result.stdout else result.stderr[:500]
@@ -127,10 +150,10 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
     return tool_name
 
 
-def process_tool_call(tool_name: str, tool_input: dict) -> str:
+def process_tool_call(tool_name: str, tool_input: dict, on_sentence=None) -> str:
     """Route tool calls to the appropriate handler."""
     if tool_name == "execute_shell_command":
-        return execute_shell_command(tool_input.get("command", ""))
+        return execute_shell_command(tool_input.get("command", ""), on_sentence=on_sentence)
     elif tool_name == "search_files":
         return search_files(
             tool_input.get("pattern", ""),
@@ -145,7 +168,12 @@ def process_tool_call(tool_name: str, tool_input: dict) -> str:
 def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool = False, on_sentence=None) -> tuple:
     """
     Route a prompt through Claude with tool use.
-    Returns (response_text, model_used, tools_called)
+    Returns (response_text, model_used, tools_called, tool_calls_log)
+
+    tools_called is a flat list of tool names (kept as-is for existing
+    callers); tool_calls_log is the richer per-call detail — name, summary,
+    and actual result — needed to log real commands + results to SQLite
+    rather than just which tool names were used (Phase 4).
 
     If on_sentence is given, it's called with each sentence of the reply as
     soon as it's available (streamed from the API), instead of only once
@@ -158,6 +186,7 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
     model = "claude-sonnet-5"
     requires_image = False
     tools_called = []
+    tool_calls_log = []
 
     # Check if screenshot is needed (simple heuristic for now)
     visual_keywords = [
@@ -335,9 +364,10 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
 
                 print(f"[Claude] 🔧 Calling tool: {tool_name}")
                 ws_server.broadcast(protocol.tool_activity_message(tool_name, "running", summary))
-                tool_result = process_tool_call(tool_name, tool_input)
+                tool_result = process_tool_call(tool_name, tool_input, on_sentence=on_sentence)
                 print(f"[Claude] 📤 Tool result: {tool_result[:100]}...")
                 ws_server.broadcast(protocol.tool_activity_message(tool_name, "done", summary))
+                tool_calls_log.append({"name": tool_name, "summary": summary, "result": tool_result})
 
                 tool_results.append({
                     "type": "tool_result",
@@ -365,7 +395,7 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
             )
             if on_sentence:
                 on_sentence(fallback)
-            return fallback, model, tools_called
+            return fallback, model, tools_called, tool_calls_log
 
         final_text = "".join(full_text_pieces)
         if not final_text:
@@ -373,11 +403,11 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
             if on_sentence:
                 on_sentence(final_text)
 
-        return final_text, model, tools_called
+        return final_text, model, tools_called, tool_calls_log
 
     except Exception as e:
         print(f"[Claude] Error: {e}")
         error_text = f"Sorry, there was a problem: {str(e)}"
         if on_sentence:
             on_sentence(error_text)
-        return error_text, model, tools_called
+        return error_text, model, tools_called, tool_calls_log

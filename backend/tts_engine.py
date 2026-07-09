@@ -24,12 +24,19 @@ class TTSEngine:
     True if playback completed all chunks, False if stop() interrupted it
     (checked both between chunks and mid-chunk).
 
-    Each item in text_chunks is either a plain string (no sentence-index
-    tracking needed, e.g. speak_reply's fixed one-shot replies) or an
-    (index, text) tuple — when an index is given, a speech_started broadcast
-    fires right as that chunk starts playing, so the frontend can highlight
-    exactly the sentence currently being spoken rather than guessing from
-    when it was generated/displayed (which runs well ahead of playback).
+    Each item in text_chunks is a plain string (no sentence-index tracking
+    needed, e.g. speak_reply's fixed one-shot replies), an (index, text)
+    tuple, or an (index, text, done_event) tuple. When an index is given, a
+    speech_started broadcast fires right as that chunk starts playing, so the
+    frontend can highlight exactly the sentence currently being spoken rather
+    than guessing from when it was generated/displayed (which runs well ahead
+    of playback). When a done_event (threading.Event) is given, it's set once
+    that specific chunk has actually finished playing (or been skipped/
+    interrupted) — callers that need to know playback genuinely completed,
+    rather than just that it was handed to the TTS consumer, wait on this
+    instead of guessing from word count (see confirmation_gate.py, which
+    needs this so a fast "yes" can't resolve before the user has actually
+    heard the command being read back).
     """
 
     def speak_stream(self, text_chunks) -> bool:
@@ -41,8 +48,11 @@ class TTSEngine:
     @staticmethod
     def _unpack(item):
         if isinstance(item, tuple):
-            return item
-        return None, item
+            if len(item) == 3:
+                return item
+            index, text = item
+            return index, text, None
+        return None, item, None
 
 
 class KokoroTTSEngine(TTSEngine):
@@ -58,18 +68,26 @@ class KokoroTTSEngine(TTSEngine):
     def speak_stream(self, text_chunks) -> bool:
         self._interrupted.clear()
         for item in text_chunks:
-            index, text = self._unpack(item)
-            if self._interrupted.is_set():
-                return False
-            if not text.strip():
-                continue
-            if index is not None:
-                ws_server.broadcast(protocol.speech_started_message(index))
-            for result in self._pipeline(text, voice=self.VOICE):
+            index, text, done_event = self._unpack(item)
+            try:
                 if self._interrupted.is_set():
                     return False
-                if not self._play(result.audio.numpy()):
-                    return False
+                if not text.strip():
+                    continue
+                if index is not None:
+                    ws_server.broadcast(protocol.speech_started_message(index))
+                for result in self._pipeline(text, voice=self.VOICE):
+                    if self._interrupted.is_set():
+                        return False
+                    if not self._play(result.audio.numpy()):
+                        return False
+            finally:
+                # Always signal, even on an early return above (interrupted)
+                # or a skipped empty chunk — a waiter blocked on this event
+                # must never hang just because this chunk didn't actually
+                # play.
+                if done_event is not None:
+                    done_event.set()
         return True
 
     def _play(self, audio: np.ndarray) -> bool:
@@ -132,29 +150,34 @@ class Pyttsx3TTSEngine(TTSEngine):
 
         self._interrupted.clear()
         for item in text_chunks:
-            index, text = self._unpack(item)
-            if self._interrupted.is_set():
-                return False
-            if not text.strip():
-                continue
-            if index is not None:
-                ws_server.broadcast(protocol.speech_started_message(index))
+            index, text, done_event = self._unpack(item)
+            try:
+                if self._interrupted.is_set():
+                    return False
+                if not text.strip():
+                    continue
+                if index is not None:
+                    ws_server.broadcast(protocol.speech_started_message(index))
 
-            # A fresh engine per utterance avoids a known pyttsx3/macOS issue
-            # where the NSSpeechSynthesizer run loop silently stops producing
-            # audio after repeated say()/runAndWait() cycles on one
-            # long-lived engine instance (hit and fixed earlier this project).
-            engine = pyttsx3.init()
-            self._current_engine = engine
-            done = threading.Event()
-            engine.connect("finished-utterance", lambda name, completed: done.set())
-            engine.say(text)
-            engine.runAndWait()
-            done.wait()
-            self._current_engine = None
+                # A fresh engine per utterance avoids a known pyttsx3/macOS
+                # issue where the NSSpeechSynthesizer run loop silently stops
+                # producing audio after repeated say()/runAndWait() cycles on
+                # one long-lived engine instance (hit and fixed earlier this
+                # project).
+                engine = pyttsx3.init()
+                self._current_engine = engine
+                done = threading.Event()
+                engine.connect("finished-utterance", lambda name, completed: done.set())
+                engine.say(text)
+                engine.runAndWait()
+                done.wait()
+                self._current_engine = None
 
-            if self._interrupted.is_set():
-                return False
+                if self._interrupted.is_set():
+                    return False
+            finally:
+                if done_event is not None:
+                    done_event.set()
         return True
 
     def stop(self) -> None:

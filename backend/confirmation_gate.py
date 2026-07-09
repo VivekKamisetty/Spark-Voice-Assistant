@@ -87,16 +87,15 @@ def _resolve(answer: str):
     return None
 
 
-# Found live: speak_fn (on_sentence) just enqueues text for the one active
-# TTS consumer and returns immediately — it does NOT block until that text
-# has actually finished playing. Starting the response-timeout clock right
-# after calling it meant the clock was already running (and silently
-# consuming several seconds of it) while the prompt itself was still being
-# synthesized and spoken, before the user had even heard the question yet.
-# There's no cheap way to know exactly when Kokoro finishes a given chunk
-# from here, so this estimates it from word count instead — approximate is
-# fine, the goal is just "don't start the clock before the user could
-# possibly have heard the question," not frame-accurate sync.
+# Fallback only: used when speak_fn doesn't hand back a real completion
+# signal (e.g. it's a fire-and-forget caller with no way to report one).
+# Approximate is fine there — the goal is just "don't start the clock before
+# the user could possibly have heard the question," not frame-accurate sync.
+# Whenever speak_fn hands back a real threading.Event (see request_confirmation
+# below), that's used instead: this estimate has no relationship to actual
+# TTS synthesis/playback time and can elapse well before the prompt has truly
+# finished being spoken — which is exactly what let a fast "yes" resolve (and
+# the command execute) while the prompt was still audibly playing.
 _WORDS_PER_SECOND = 2.5
 
 
@@ -118,7 +117,13 @@ def request_confirmation(prompt, risk="high", options=("Yes", "No"), timeout=DEF
     already mid-stream (like claude_client's tool loop, which already has an
     on_sentence callback feeding the single active TTS consumer) should pass
     that through rather than this module opening a second, concurrent TTS
-    call of its own.
+    call of its own. If speak_fn returns a threading.Event, it's treated as a
+    real "this chunk has actually finished playing" signal and waited on
+    directly instead of guessing from word count — without this, a fast
+    click/voice "yes" could be drained from confirmation_response_queue and
+    acted on (including actually running the command) while the prompt was
+    still audibly speaking, since offer_response()/offer_voice_text() queue a
+    response the instant it arrives, independent of playback.
     """
     global pending_confirmation_id
 
@@ -136,18 +141,26 @@ def request_confirmation(prompt, risk="high", options=("Yes", "No"), timeout=DEF
         confirmation_id, prompt, risk=risk, options=list(options)
     ))
     if speak_fn:
-        speak_fn(prompt)
-        # speak_fn just enqueues the prompt for the one active TTS consumer
-        # and returns immediately — waiting out an estimate of how long it
-        # takes to actually finish being spoken before starting the response
-        # clock below, so the user doesn't lose part of their response
-        # window to a question they hadn't finished hearing yet.
-        time.sleep(_estimate_speaking_seconds(prompt))
-    # Only now, after the prompt has actually (approximately) finished being
-    # spoken, are we truly just sitting and waiting on an answer — broadcast
-    # the state here rather than before speak_fn, since speak_fn's own state
-    # broadcasts (speaking -> listening) would otherwise immediately
-    # overwrite an earlier "awaiting_confirmation".
+        done_event = speak_fn(prompt)
+        if done_event is not None:
+            # Real signal from the TTS engine: wait for this exact chunk to
+            # actually finish playing (or be skipped/interrupted) rather than
+            # guessing. Capped generously so a stuck/never-signaling engine
+            # can't hang the tool call forever — normal playback always sets
+            # this well before the cap.
+            done_event.wait(timeout=max(_estimate_speaking_seconds(prompt) * 4, 15))
+        else:
+            # speak_fn didn't hand back anything to wait on — either nothing
+            # was actually queued for TTS (e.g. muted voice mode), or the
+            # caller already blocked synchronously before returning (e.g.
+            # speak_reply, used by the clear-history flow). Fall back to the
+            # word-count estimate as a safe minimum wait either way.
+            time.sleep(_estimate_speaking_seconds(prompt))
+    # Only now, after the prompt has actually finished being spoken, are we
+    # truly just sitting and waiting on an answer — broadcast the state here
+    # rather than before speak_fn, since speak_fn's own state broadcasts
+    # (speaking -> listening) would otherwise immediately overwrite an
+    # earlier "awaiting_confirmation".
     ws_server.broadcast(protocol.state_message("awaiting_confirmation"))
 
     # Found live (the actual root cause behind voice confirmations never

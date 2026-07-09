@@ -461,7 +461,15 @@ def process_claude_turn(line, chat_history):
         if display_text.strip():
             ws_server.broadcast(protocol.assistant_chunk_message(display_text, chunk_index))
         if spoken_text.strip():
-            sentence_queue.put((chunk_index, spoken_text))
+            # Handed back to callers (e.g. confirmation_gate's speak_fn) that
+            # need to know when this specific chunk has actually finished
+            # playing, not just that it was handed to the TTS consumer —
+            # tts_engine sets this once real playback of this chunk
+            # completes (or is skipped/interrupted).
+            done_event = threading.Event()
+            sentence_queue.put((chunk_index, spoken_text, done_event))
+            return done_event
+        return None
 
     def run_claude():
         reply, model_used, tools_called, tool_calls_log = route_gpt_reply(

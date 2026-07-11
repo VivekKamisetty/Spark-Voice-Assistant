@@ -86,6 +86,17 @@ same commands combined with `| ; & \` $ < >` — requires confirmation.
 | 5.12 | While a confirmation is pending, say something unrelated, e.g. "thank you" or random ambient chatter | Ignored — logged as unrelated input, confirmation stays pending (not treated as an implicit decline). Verify by then actually answering "yes" afterward and having it still resolve correctly |
 | 5.13 | Ask for something clearly destructive, e.g. "delete everything in my Downloads folder" | Triggers confirmation; decline it (say "no") and verify via `ls ~/Downloads` that nothing was actually deleted |
 
+## 5b. Semantic memory (Phase 5)
+
+| # | Action | Expected |
+|---|---|---|
+| 5b.1 | "Remember that my favorite color is teal" | `remember_this` tool runs with **no** confirmation prompt (memory writes are low-risk); Spark confirms verbally |
+| 5b.2 | Later in the same session, ask "what color do I like best?" (different wording) | Answers correctly from the stored memory (semantic retrieval, not keyword match) |
+| 5b.3 | "Forget my favorite color" | Triggers a confirmation (low-risk styled, not the red high-risk styling from §5) before deleting — decline once and verify `sqlite3 ~/.spark/spark.db "select content from memories;"` still shows it, then confirm and verify it's gone |
+| 5b.4 | Mention a fact in passing without asking Spark to remember it (e.g. "I'm making soup for my roommate Priya, she's sick") | No `remember_this` tool call this turn — but quit the app cleanly afterward (Cmd+Q or SIGTERM) and check `sqlite3 ~/.spark/spark.db "select content from memories;"` — the fact should appear, picked up by the session-end extraction pass |
+| 5b.5 | Restart the app, ask about a previously remembered fact in different wording | Answers correctly — this is Phase 5's actual acceptance test (persists across process restart, not just within a session) |
+| 5b.6 | Have a long conversation (15+ turns) in one sitting | A periodic extraction pass should fire mid-session (check terminal log / DB for new memory rows) without waiting for app quit |
+
 ## 6. Multi-step tool chaining
 
 | # | Action | Expected |

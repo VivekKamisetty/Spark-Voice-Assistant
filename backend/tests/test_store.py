@@ -97,6 +97,21 @@ def test_load_recent_messages_trims_dangling_trailing_user():
     ]
 
 
+def test_add_list_delete_memory():
+    conn = make_db()
+    session_id = store.start_session(conn)
+    memory_id = store.add_memory(conn, "likes tea", session_id, b"\x00\x01")
+
+    rows = store.list_memories(conn)
+    assert len(rows) == 1
+    assert rows[0]["id"] == memory_id
+    assert rows[0]["content"] == "likes tea"
+    assert rows[0]["embedding"] == b"\x00\x01"
+
+    store.delete_memory(conn, memory_id)
+    assert store.list_memories(conn) == []
+
+
 def test_clear_history():
     conn = make_db()
     session_id = store.start_session(conn)

@@ -37,7 +37,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
         )
         """
     )
-    # Schema only for now — populated starting in Phase 5's semantic memory work.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memories (
@@ -103,4 +102,31 @@ def load_recent_messages(conn: sqlite3.Connection, limit: int = 20) -> list:
 
 def clear_history(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM messages")
+    conn.commit()
+
+
+# Phase 5 (semantic memory). Unlike the rest of this module, these three are
+# safe to call from any thread, PROVIDED the caller passes a connection it
+# opened on that same thread (via init_db()) rather than reusing another
+# thread's connection — memory.py's callers on the tool-call thread each open
+# their own short-lived connection for exactly this reason; only the shared
+# module-level `_db` in spark_whisper_mic.py is restricted to its main() loop.
+
+
+def add_memory(conn: sqlite3.Connection, content: str, source_session_id, embedding: bytes) -> int:
+    cur = conn.execute(
+        "INSERT INTO memories (content, source_session_id, created_at, embedding) VALUES (?, ?, ?, ?)",
+        (content, source_session_id, time.time(), embedding),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_memories(conn: sqlite3.Connection) -> list:
+    rows = conn.execute("SELECT id, content, embedding FROM memories").fetchall()
+    return [{"id": row[0], "content": row[1], "embedding": row[2]} for row in rows]
+
+
+def delete_memory(conn: sqlite3.Connection, memory_id: int) -> None:
+    conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
     conn.commit()

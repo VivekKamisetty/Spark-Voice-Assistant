@@ -277,12 +277,25 @@ function renderBriefing(text) {
 
   container.prepend(wrapper);
   expandPanel();
-  scrollTranscriptToBottom();
+  // Deliberately scrollTranscriptToTop, not …ToBottom: the briefing is
+  // prepended as the first thing in the panel, and on a shorter screen
+  // (smaller maxPanelHeight — see expandPanel) a multi-sentence briefing can
+  // be taller than the visible area. Scrolling to bottom (the normal
+  // behavior for a growing reply) would scroll straight past the label and
+  // opening sentences — found live from a real screenshot where exactly
+  // that happened, showing only the tail end of the message with no label
+  // visible at all.
+  scrollTranscriptToTop();
 }
 
 function scrollTranscriptToBottom() {
   const scroll = document.getElementById('transcript-scroll');
   scroll.scrollTop = scroll.scrollHeight;
+}
+
+function scrollTranscriptToTop() {
+  const scroll = document.getElementById('transcript-scroll');
+  scroll.scrollTop = 0;
 }
 
 // --- Tool activity ---

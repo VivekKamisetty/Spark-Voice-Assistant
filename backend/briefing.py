@@ -11,10 +11,12 @@ Open-Meteo call; the only Claude API call here is the final one-shot
 composition of the spoken summary from that gathered data.
 """
 
+import concurrent.futures
 import datetime
 import json
 import os
 import subprocess
+import time
 
 import requests
 from anthropic import Anthropic
@@ -85,23 +87,35 @@ def should_deliver_briefing(config: dict = None) -> bool:
     return True
 
 
-_CALENDAR_SCRIPT = '''
-tell application "Calendar"
-    set todayStart to current date
-    set time of todayStart to 0
-    set todayEnd to todayStart + 1 * days
-    set eventList to {}
-    repeat with cal in calendars
-        try
-            set calEvents to (every event of cal whose start date ≥ todayStart and start date < todayEnd)
-            repeat with ev in calEvents
-                set end of eventList to (summary of ev as string) & " at " & (time string of (start date of ev))
-            end repeat
-        end try
-    end repeat
-    return eventList
-end tell
-'''
+_CALENDAR_NAMES_SCRIPT = 'tell application "Calendar" to return (name of every calendar)'
+
+# Bound on a single calendar's own event query. Found live: querying all
+# calendars in one combined "whose start date >= X" AppleScript query (the
+# original approach) reliably took the full _OSASCRIPT_TIMEOUT (45s) because
+# two holiday-subscription calendars alone accounted for ~28s of it --
+# Calendar.app's "whose" date-range filter isn't indexed, so it has to
+# evaluate/expand every occurrence of every recurring event (holiday
+# calendars are the classic pathological case: years of annually-recurring
+# all-day entries) to decide whether any single occurrence falls in today's
+# range. Querying each calendar separately bounds one slow calendar's cost
+# to its own timeout rather than the whole lookup.
+#
+# Deliberately sequential, not concurrent, despite that being the first fix
+# attempted here: querying calendars via a ThreadPoolExecutor made things
+# *worse*, not better -- found live that even 2 concurrent osascript calls
+# against Calendar.app caused a calendar that normally answers in ~8s to
+# time out entirely. Calendar.app appears to serialize its own Apple Events
+# handling internally, so concurrent client requests contend with each other
+# rather than actually running in parallel. _CALENDAR_TOTAL_BUDGET below is
+# what actually bounds worst-case wall-clock time here, not concurrency.
+_PER_CALENDAR_TIMEOUT = 10
+
+# Hard ceiling on the whole calendar section of the briefing, regardless of
+# how many calendars exist or how many are individually slow -- once this
+# much time has been spent, remaining not-yet-queried calendars are skipped
+# (same "contributes nothing this time" degradation as a single timed-out
+# calendar) rather than trying all of them unconditionally.
+_CALENDAR_TOTAL_BUDGET = 20
 
 _REMINDERS_SCRIPT = '''
 tell application "Reminders"
@@ -144,14 +158,105 @@ def _run_osascript(script: str, permission_hint: str, empty_text: str, timeout_t
     return text if text else empty_text
 
 
+def _get_calendar_names():
+    """(names, error_text). names is None if the calendar list itself
+    couldn't be fetched (permission/timeout/other failure) -- check
+    error_text in that case, a plain list (possibly empty) otherwise. This
+    call alone is fast (no date-range "whose" filter involved), so it uses a
+    short fixed timeout rather than _PER_CALENDAR_TIMEOUT.
+    """
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _CALENDAR_NAMES_SCRIPT],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "Calendar lookup timed out."
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "not allowed" in stderr.lower() or "-1743" in stderr:
+            return None, "Calendar access hasn't been granted yet (System Settings > Privacy & Security > Calendars)."
+        return None, "Couldn't read the calendar."
+
+    text = result.stdout.strip()
+    if not text:
+        return [], None
+    return [name.strip() for name in text.split(",") if name.strip()], None
+
+
+def _events_for_one_calendar(name: str, timeout: float = _PER_CALENDAR_TIMEOUT) -> str:
+    """Today's events for a single named calendar, as osascript's natural
+    comma-joined list-to-string coercion (possibly empty). Failures
+    (including a timeout) return "" rather than propagating -- one
+    problem calendar should degrade to "its events are missing", not take
+    down the whole calendar section of the briefing. timeout is overridable
+    so _get_todays_calendar_events can clamp it to whatever's left of the
+    overall budget for the last calendar or two it attempts.
+    """
+    escaped = name.replace('"', '\\"')
+    script = f'''
+tell application "Calendar"
+    set todayStart to current date
+    set time of todayStart to 0
+    set todayEnd to todayStart + 1 * days
+    set eventList to {{}}
+    set calEvents to (every event of calendar "{escaped}" whose start date ≥ todayStart and start date < todayEnd)
+    repeat with ev in calEvents
+        set end of eventList to (summary of ev as string) & " at " & (time string of (start date of ev))
+    end repeat
+    return eventList
+end tell
+'''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[Briefing] Calendar '{name}' timed out, skipping its events.")
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 def _get_todays_calendar_events() -> str:
-    return _run_osascript(
-        _CALENDAR_SCRIPT,
-        permission_hint="Calendar access hasn't been granted yet (System Settings > Privacy & Security > Calendars).",
-        empty_text="No events today.",
-        timeout_text="Calendar lookup timed out.",
-        error_text="Couldn't read the calendar.",
-    )
+    names, error = _get_calendar_names()
+    if names is None:
+        return error
+    if not names:
+        return "No events today."
+
+    # Holiday-subscription calendars are the observed pathological case
+    # (years of annually-recurring all-day entries make Calendar.app's
+    # "whose" date filter extremely slow to evaluate) -- found live that
+    # they happened to sit early enough in Calendar.app's own ordering that
+    # the time budget below got spent on them before even reaching fast,
+    # actually-relevant calendars like Work or Home. Trying non-holiday-
+    # named calendars first means the budget is spent on calendars that are
+    # both faster and more likely to matter for a daily briefing before it's
+    # spent on ones that are neither. `sorted` is stable, so the relative
+    # order within each group still matches Calendar.app's own ordering.
+    names = sorted(names, key=lambda n: "holiday" in n.lower())
+
+    results = []
+    deadline = time.monotonic() + _CALENDAR_TOTAL_BUDGET
+    for name in names:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            skipped = names[len(results):]
+            print(f"[Briefing] Calendar time budget exhausted, skipping: {skipped}")
+            break
+        # Clamped to whatever's actually left so the last calendar attempted
+        # can't blow past _CALENDAR_TOTAL_BUDGET on its own -- without this,
+        # a calendar started just before the deadline could still run for
+        # its full _PER_CALENDAR_TIMEOUT regardless of how little budget
+        # remained.
+        results.append(_events_for_one_calendar(name, timeout=min(_PER_CALENDAR_TIMEOUT, remaining)))
+
+    events_text = ", ".join(text for text in results if text)
+    return events_text if events_text else "No events today."
 
 
 def _get_due_reminders() -> str:
@@ -296,35 +401,66 @@ def _compose_briefing_text(calendar_text: str, reminders_text: str, weather_text
     return "".join(block.text for block in response.content if block.type == "text").strip()
 
 
-def maybe_deliver_briefing(speak_fn=None) -> bool:
-    """Delivers the once-a-day morning briefing if conditions are met
-    (enabled, not yet given today, past MIN_BRIEFING_HOUR local). Returns
-    True if a briefing was actually delivered.
+def _gather_briefing_inputs(config: dict):
+    """Runs the calendar, reminders, and weather lookups concurrently —
+    they're independent of each other, so running them one after another
+    (as this originally did) only adds unnecessary wall-clock time, and the
+    calendar lookup in particular can be slow (up to _OSASCRIPT_TIMEOUT).
+    Returns (calendar_text, reminders_text, weather_text).
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        calendar_future = executor.submit(_get_todays_calendar_events)
+        reminders_future = executor.submit(_get_due_reminders)
+        weather_future = executor.submit(_get_weather, config)
+        return calendar_future.result(), reminders_future.result(), weather_future.result()
+
+
+def prepare_briefing_text() -> str:
+    """Gathers and composes the briefing text if conditions are met (see
+    should_deliver_briefing), WITHOUT marking it delivered, broadcasting, or
+    speaking it. Returns "" if conditions aren't met or gathering/
+    composition failed — never None, so callers can treat the return value
+    as a plain truthy/falsy check.
+
+    Deliberately separate from delivery: call this as early as possible
+    (e.g. from a background thread started right at process launch, before
+    Whisper/Kokoro model loading and VAD calibration) so the gathering —
+    two osascript calls, a weather API call, and one Claude call, all
+    network/IO-bound — overlaps with the rest of app startup instead of
+    adding to the wait after the app is already listening and the user
+    could start talking. See spark_whisper_mic.py's module-level prefetch
+    thread and its use of deliver_prepared_briefing below.
+    """
+    config = _read_config()
+    if not should_deliver_briefing(config):
+        return ""
+    try:
+        calendar_text, reminders_text, weather_text = _gather_briefing_inputs(config)
+        text = _compose_briefing_text(calendar_text, reminders_text, weather_text)
+    except Exception as e:
+        print(f"[Briefing] Failed to compose morning briefing: {e}")
+        return ""
+    return text
+
+
+def deliver_prepared_briefing(text: str, speak_fn=None) -> bool:
+    """Marks today's briefing delivered, broadcasts it, and speaks it. Call
+    with the (non-empty) result of prepare_briefing_text() — skip entirely
+    if that returned "". Re-checks should_deliver_briefing first so text
+    prepared early doesn't get delivered twice if something else already
+    delivered today's briefing in the meantime (the two trigger sites in
+    spark_whisper_mic.py can otherwise race).
     """
     config = _read_config()
     if not should_deliver_briefing(config):
         return False
 
-    # Marked done immediately, before any of the gathering below (which
-    # calls out to macOS apps and two external services and can fail in any
-    # number of ways) -- a mid-gather crash or a denied permission should
-    # not leave the briefing re-attempting on every subsequent turn for the
-    # rest of the day. Best-effort, once per day, not best-effort-until-it-
-    # works.
+    # Marked done before broadcasting/speaking (not after) so a failure in
+    # either doesn't leave the briefing re-attempting later today — matches
+    # prepare_briefing_text's own best-effort-once, not
+    # best-effort-until-it-works, stance on its half of the work.
     config["last_briefing_date"] = _today_str()
     _write_config(config)
-
-    try:
-        calendar_text = _get_todays_calendar_events()
-        reminders_text = _get_due_reminders()
-        weather_text = _get_weather(config)
-        text = _compose_briefing_text(calendar_text, reminders_text, weather_text)
-    except Exception as e:
-        print(f"[Briefing] Failed to compose morning briefing: {e}")
-        return False
-
-    if not text:
-        return False
 
     # Broadcast before speaking, not after: speak_fn blocks until TTS
     # playback actually finishes (many seconds for a multi-sentence
@@ -334,3 +470,17 @@ def maybe_deliver_briefing(speak_fn=None) -> bool:
     if speak_fn:
         speak_fn(text)
     return True
+
+
+def maybe_deliver_briefing(speak_fn=None) -> bool:
+    """All-in-one convenience entry point: gather, compose, mark delivered,
+    broadcast, and speak, in one call. Used by the "first real utterance of
+    the day" fallback trigger, where there's no earlier point to prefetch
+    from. For the app-launch trigger, prefer prepare_briefing_text() (called
+    as early as possible) + deliver_prepared_briefing(), so the gathering
+    overlaps with other startup work instead of stacking after it.
+    """
+    text = prepare_briefing_text()
+    if not text:
+        return False
+    return deliver_prepared_briefing(text, speak_fn=speak_fn)

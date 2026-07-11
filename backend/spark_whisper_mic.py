@@ -144,6 +144,24 @@ def calibrate_vad_threshold(duration=2.0):
 
 print = functools.partial(print, flush=True)
 
+# Phase 6: start gathering+composing the morning briefing (if today's
+# conditions call for one) on a background thread as early in startup as
+# possible — before Kokoro/Whisper model loading and VAD calibration below,
+# not after. Those are the only other things startup is doing before Spark
+# is actually "live", so this overlaps the briefing's network/IO-bound work
+# (osascript calls, weather, one Claude call) with them instead of adding to
+# the wait once the app is already ready and the user could start talking.
+# main() joins this thread and delivers whatever it produced — see there for
+# why this is a plain dict rather than a return value (the thread itself has
+# nowhere to return one to).
+_briefing_prefetch = {}
+
+def _prefetch_briefing():
+    _briefing_prefetch["text"] = briefing.prepare_briefing_text()
+
+briefing_prefetch_thread = threading.Thread(target=_prefetch_briefing, daemon=True)
+briefing_prefetch_thread.start()
+
 # Kokoro is the primary engine (chosen after a direct side-by-side listening
 # comparison against pyttsx3); pyttsx3 stays available as a fallback behind
 # the same interface if Kokoro's dependencies aren't installed.
@@ -575,12 +593,22 @@ def main():
 
     write_status("listening")
 
-    # Covers "app launch after 5 a.m." (Phase 6) -- the other stated trigger,
-    # "first voice activity of the day", is checked again below at the first
-    # real utterance, for the case of a long-running session that crosses
-    # midnight without a restart. Both call the same idempotent function, so
-    # it can only actually fire once per day regardless of which one wins.
-    briefing.maybe_deliver_briefing(speak_fn=speak_briefing)
+    # Covers "app launch after 5 a.m." (Phase 6). The gathering already
+    # happened (or is close to done) on briefing_prefetch_thread, started at
+    # module load before Whisper/Kokoro warmup and VAD calibration — join
+    # rather than re-gathering from scratch here, so whatever wait remains
+    # is only however much of it didn't fit inside that other startup work,
+    # not the full gather+compose time on top of an already-ready app. The
+    # other stated trigger, "first voice activity of the day", is checked
+    # again below at the first real utterance, for the case of a
+    # long-running session that crosses midnight without a restart --
+    # deliver_prepared_briefing/maybe_deliver_briefing both re-check
+    # should_deliver_briefing, so only one of the two trigger sites can
+    # actually deliver on a given day regardless of which fires first.
+    briefing_prefetch_thread.join(timeout=60)
+    prefetched_briefing_text = _briefing_prefetch.get("text")
+    if prefetched_briefing_text:
+        briefing.deliver_prepared_briefing(prefetched_briefing_text, speak_fn=speak_briefing)
 
     while True:
         if not transcript_queue.empty():

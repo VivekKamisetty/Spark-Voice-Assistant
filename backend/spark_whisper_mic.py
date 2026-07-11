@@ -587,28 +587,32 @@ def main():
     chat_history = store.load_recent_messages(_db, limit=20)
     turn_count = 0
 
+    # Phase 6: deliver the morning briefing (if today's conditions call for
+    # one) BEFORE starting the mic listener / typed-input watcher, or
+    # announcing "listening" at all. If Spark were already accepting input
+    # while the briefing was still being gathered or spoken, anything the
+    # user said in that window would sit unanswered until the briefing
+    # finished — reading as Spark ignoring them and then barging in with a
+    # briefing over an unaddressed request. Blocking here instead means
+    # nothing is capturing input until the briefing is fully done, so there
+    # is no window for that confusion.
+    #
+    # This doesn't add wait time on top of what's already there: the
+    # gathering itself started as early as possible, on
+    # briefing_prefetch_thread at module load — before Kokoro/Whisper
+    # warmup and VAD calibration above even ran — so this join only waits
+    # for whatever of that work didn't already finish during that other
+    # startup time.
+    briefing_prefetch_thread.join(timeout=60)
+    prefetched_briefing_text = _briefing_prefetch.get("text")
+    if prefetched_briefing_text:
+        briefing.deliver_prepared_briefing(prefetched_briefing_text, speak_fn=speak_briefing)
+
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
     threading.Thread(target=incoming_message_watcher, args=(transcript_queue,), daemon=True).start()
 
     write_status("listening")
-
-    # Covers "app launch after 5 a.m." (Phase 6). The gathering already
-    # happened (or is close to done) on briefing_prefetch_thread, started at
-    # module load before Whisper/Kokoro warmup and VAD calibration — join
-    # rather than re-gathering from scratch here, so whatever wait remains
-    # is only however much of it didn't fit inside that other startup work,
-    # not the full gather+compose time on top of an already-ready app. The
-    # other stated trigger, "first voice activity of the day", is checked
-    # again below at the first real utterance, for the case of a
-    # long-running session that crosses midnight without a restart --
-    # deliver_prepared_briefing/maybe_deliver_briefing both re-check
-    # should_deliver_briefing, so only one of the two trigger sites can
-    # actually deliver on a given day regardless of which fires first.
-    briefing_prefetch_thread.join(timeout=60)
-    prefetched_briefing_text = _briefing_prefetch.get("text")
-    if prefetched_briefing_text:
-        briefing.deliver_prepared_briefing(prefetched_briefing_text, speak_fn=speak_briefing)
 
     while True:
         if not transcript_queue.empty():
@@ -620,10 +624,17 @@ def main():
             # them would ever match real transcribed speech.
             stripped_line = normalized_line.strip(".,!?")
 
-            # First real utterance of the day (see the launch-time check
-            # above for the other trigger) -- takes priority over even
-            # clear-history, since it's not a response to anything the user
-            # said, just an interstitial before normal processing continues.
+            # Fallback for a long-running session that crosses midnight
+            # without a restart (the launch-time delivery above only covers
+            # a fresh launch on the new day). This one genuinely can
+            # interrupt an in-progress interaction -- by the time any
+            # utterance reaches this point the mic has already been running
+            # since launch, so unlike the launch-time case there's no way to
+            # guarantee nothing was mid-flight. Accepted as a rare edge case
+            # (a session spanning two calendar days) rather than something
+            # worth complicating the common path for; is a no-op on every
+            # ordinary day since the launch-time delivery already marked
+            # today done.
             briefing.maybe_deliver_briefing(speak_fn=speak_briefing)
 
             if stripped_line in CLEAR_HISTORY_PHRASES:

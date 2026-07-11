@@ -17,6 +17,7 @@ import ws_server
 import protocol
 import store
 import memory
+import briefing
 import audio_bands
 import confirmation_gate
 import mic_control
@@ -396,6 +397,24 @@ def speak_reply(text, show_popup=False):
     _post_speech_cleanup()
 
 
+def speak_briefing(text):
+    """Like speak_reply, but doesn't also broadcast the text as a generic
+    assistant reply (write_status's text= param does that as a side effect).
+    The morning briefing (Phase 6) has its own dedicated protocol message
+    and labeled UI treatment — briefing.py broadcasts protocol.briefing_
+    message() itself, before calling this — so going through write_status's
+    text param here too would show the same text twice: once unlabeled
+    (immediately, via the generic assistant_chunk path) and once labeled
+    (only after TTS finishes, since that broadcast happens after speak_fn
+    returns).
+    """
+    write_status("speaking")
+
+    mic_control.mute_microphone()
+    tts_engine.speak_stream(iter([text]))
+    _post_speech_cleanup()
+
+
 def incoming_message_watcher(transcript_queue):
     """Watches messages the frontend sends back over the WebSocket:
     - interrupt: tap-to-interrupt (Phase 2) — stop whatever TTS is playing.
@@ -556,6 +575,13 @@ def main():
 
     write_status("listening")
 
+    # Covers "app launch after 5 a.m." (Phase 6) -- the other stated trigger,
+    # "first voice activity of the day", is checked again below at the first
+    # real utterance, for the case of a long-running session that crosses
+    # midnight without a restart. Both call the same idempotent function, so
+    # it can only actually fire once per day regardless of which one wins.
+    briefing.maybe_deliver_briefing(speak_fn=speak_briefing)
+
     while True:
         if not transcript_queue.empty():
             line = transcript_queue.get().strip()
@@ -565,6 +591,12 @@ def main():
             # form rather than normalized_line directly — otherwise none of
             # them would ever match real transcribed speech.
             stripped_line = normalized_line.strip(".,!?")
+
+            # First real utterance of the day (see the launch-time check
+            # above for the other trigger) -- takes priority over even
+            # clear-history, since it's not a response to anything the user
+            # said, just an interstitial before normal processing continues.
+            briefing.maybe_deliver_briefing(speak_fn=speak_briefing)
 
             if stripped_line in CLEAR_HISTORY_PHRASES:
                 cancel_idle_timer()

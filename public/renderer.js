@@ -101,8 +101,7 @@ function handleSparkMessage(msg) {
       break;
 
     case 'briefing':
-      // Phase 6 feature — not wired up on the UI side yet.
-      console.log('[Spark UI] briefing', msg);
+      renderBriefing(msg.text);
       break;
 
     default:
@@ -244,6 +243,41 @@ function finalizeAssistantMessage() {
   }
   currentAssistantEl = null;
   highestSpokenIndex = -1;
+}
+
+// Arrives as one complete message (not streamed sentence-by-sentence like
+// assistant_chunk), and isn't a reply to anything the user said — rendered
+// as its own labeled bubble rather than reusing appendAssistantChunk's
+// streaming-cursor machinery, which assumes an in-progress reply.
+//
+// Prepended rather than clearing the container: the backend's other trigger
+// for this (first real utterance of the day, not just app launch — see
+// spark_whisper_mic.py) fires *after* that utterance's own transcript has
+// already been rendered, so clearing here would silently wipe the user's
+// just-shown message right before Spark's reply to it arrives. Prepending
+// keeps the briefing visually first (it was spoken first) without erasing
+// the exchange that triggered it.
+function renderBriefing(text) {
+  const container = getTranscriptContainer();
+  currentAssistantEl = null;
+  currentUserEl = null;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message assistant briefing';
+
+  const label = document.createElement('div');
+  label.className = 'briefing-label';
+  label.textContent = '🌅 Morning Briefing';
+  wrapper.appendChild(label);
+
+  const body = document.createElement('div');
+  body.className = 'sentence';
+  body.innerHTML = marked.parse(text);
+  wrapper.appendChild(body);
+
+  container.prepend(wrapper);
+  expandPanel();
+  scrollTranscriptToBottom();
 }
 
 function scrollTranscriptToBottom() {

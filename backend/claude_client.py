@@ -10,6 +10,8 @@ import ws_server
 import protocol
 import confirmation_gate
 import risk_classifier
+import store
+import memory
 from sentence_splitter import split_into_sentences
 
 load_dotenv()
@@ -71,6 +73,34 @@ TOOLS = [
                 }
             },
             "required": ["app_name"]
+        }
+    },
+    {
+        "name": "remember_this",
+        "description": "Save a durable fact about the user for future conversations (preferences, ongoing projects, recurring schedule, names of people/places). Use when the user explicitly asks you to remember something.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact to remember, phrased so it makes sense read alone with no other context later (e.g. \"The user's standup is at 9:30am\", not \"it's at 9:30\")."
+                }
+            },
+            "required": ["content"]
+        }
+    },
+    {
+        "name": "forget",
+        "description": "Delete a previously remembered fact about the user. Use when the user explicitly asks you to forget something.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A description of the fact to forget, in the user's own words."
+                }
+            },
+            "required": ["query"]
         }
     }
 ]
@@ -139,6 +169,51 @@ def open_application(app_name: str) -> str:
         return f"Error opening application: {str(e)}"
 
 
+def remember_this(content: str, session_id) -> str:
+    """Embed and store a durable fact. Opens its own short-lived DB
+    connection since tool calls run on the streaming background thread, not
+    spark_whisper_mic.py's main() thread that owns the shared connection
+    (see store.py's docstring — sqlite3 connections aren't safe to share
+    across threads). Memory writes are low-risk (Phase 5 spec) — no
+    confirmation gate, unlike forget below.
+    """
+    conn = store.init_db()
+    try:
+        memory_id = memory.save_memory(conn, content, session_id)
+    finally:
+        conn.close()
+    if memory_id is None:
+        return f"Already remembered something similar to: {content}"
+    return f"Remembered: {content}"
+
+
+def forget(query: str, on_sentence=None) -> str:
+    """Delete the best-matching remembered fact, after confirmation —
+    deletions require the same confirmation gate as risky shell commands
+    (Phase 4), even though memory writes themselves don't.
+    """
+    conn = store.init_db()
+    try:
+        match = memory.find_best_match(conn, query)
+        if match is None:
+            return f"Couldn't find anything remembered matching: {query}"
+        memory_id, content, _ = match
+
+        confirmed = confirmation_gate.request_confirmation(
+            f"Should I forget this: {content}?",
+            risk="low",
+            options=["Yes", "No"],
+            speak_fn=on_sentence,
+        )
+        if not confirmed:
+            return f"Not forgotten — the user did not confirm: {content}"
+
+        store.delete_memory(conn, memory_id)
+        return f"Forgot: {content}"
+    finally:
+        conn.close()
+
+
 def _tool_summary(tool_name: str, tool_input: dict) -> str:
     """Short human-readable description of a tool call, for tool_activity messages."""
     if tool_name == "execute_shell_command":
@@ -147,10 +222,14 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         return f"Searching for {tool_input.get('pattern', '')}"
     elif tool_name == "open_application":
         return f"Opening {tool_input.get('app_name', '')}"
+    elif tool_name == "remember_this":
+        return f"Remembering: {tool_input.get('content', '')}"[:100]
+    elif tool_name == "forget":
+        return f"Forgetting: {tool_input.get('query', '')}"[:100]
     return tool_name
 
 
-def process_tool_call(tool_name: str, tool_input: dict, on_sentence=None) -> str:
+def process_tool_call(tool_name: str, tool_input: dict, on_sentence=None, session_id=None) -> str:
     """Route tool calls to the appropriate handler."""
     if tool_name == "execute_shell_command":
         return execute_shell_command(tool_input.get("command", ""), on_sentence=on_sentence)
@@ -161,11 +240,15 @@ def process_tool_call(tool_name: str, tool_input: dict, on_sentence=None) -> str
         )
     elif tool_name == "open_application":
         return open_application(tool_input.get("app_name", ""))
+    elif tool_name == "remember_this":
+        return remember_this(tool_input.get("content", ""), session_id)
+    elif tool_name == "forget":
+        return forget(tool_input.get("query", ""), on_sentence=on_sentence)
     else:
         return f"Unknown tool: {tool_name}"
 
 
-def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool = False, on_sentence=None) -> tuple:
+def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool = False, on_sentence=None, session_id=None) -> tuple:
     """
     Route a prompt through Claude with tool use.
     Returns (response_text, model_used, tools_called, tool_calls_log)
@@ -182,6 +265,10 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
     Tool-calling turns don't usually have text to stream (Claude is deciding
     to call a tool, not composing a spoken answer yet), but if Claude does
     say something before calling a tool, that gets streamed too.
+
+    session_id is threaded through to the remember_this/forget tool handlers
+    (for audit provenance on new memories) and used here to retrieve
+    semantically relevant memories for this specific prompt (Phase 5).
     """
     model = "claude-sonnet-5"
     requires_image = False
@@ -279,7 +366,8 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
     # System prompt
     system_prompt = (
         "You are Spark, a helpful voice assistant running on a MacBook. "
-        "You can execute commands, search files, and open applications. "
+        "You can execute commands, search files, open applications, and "
+        "remember or forget durable facts about the user. "
         "Keep responses concise and natural for voice output. "
         "If the user asks you to do something, use the available tools. "
         "If a tool call fails, explain it to the user naturally. "
@@ -311,6 +399,22 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
         "that short headline, skip the marker and the detail section "
         "entirely."
     )
+
+    # Phase 5: pull in whatever remembered facts are actually relevant to
+    # this specific prompt (semantic match, not just "recent") — opens its
+    # own short-lived connection since this runs on the tool-call/streaming
+    # thread, not spark_whisper_mic.py's main() thread (see memory.py).
+    memory_conn = store.init_db()
+    try:
+        relevant_memories = memory.retrieve_relevant(memory_conn, prompt)
+    finally:
+        memory_conn.close()
+    if relevant_memories:
+        system_prompt += (
+            "\n\nKnown facts about the user, from previous conversations "
+            "(only mention one if it's actually relevant to this request):\n"
+            + "\n".join(f"- {fact}" for fact in relevant_memories)
+        )
 
     def stream_call():
         """One streaming API call: yields sentences to on_sentence as they
@@ -364,7 +468,7 @@ def route_claude_reply(prompt: str, chat_history: list, screenshot_enabled: bool
 
                 print(f"[Claude] 🔧 Calling tool: {tool_name}")
                 ws_server.broadcast(protocol.tool_activity_message(tool_name, "running", summary))
-                tool_result = process_tool_call(tool_name, tool_input, on_sentence=on_sentence)
+                tool_result = process_tool_call(tool_name, tool_input, on_sentence=on_sentence, session_id=session_id)
                 print(f"[Claude] 📤 Tool result: {tool_result[:100]}...")
                 ws_server.broadcast(protocol.tool_activity_message(tool_name, "done", summary))
                 tool_calls_log.append({"name": tool_name, "summary": summary, "result": tool_result})

@@ -16,6 +16,7 @@ from claude_client import route_claude_reply as route_gpt_reply
 import ws_server
 import protocol
 import store
+import memory
 import audio_bands
 import confirmation_gate
 import mic_control
@@ -89,6 +90,13 @@ def cancel_idle_timer():
         idle_timer.cancel()
         idle_timer = None
 
+def _transcript_text(messages: list) -> str:
+    """Renders store.py message rows (or chat_history entries — same shape)
+    into plain text suitable for the memory-extraction prompt.
+    """
+    return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+
+
 def cleanup_before_exit():
     print("[Spark] 🧼 Cleaning up before shutdown...")
     try:
@@ -96,6 +104,15 @@ def cleanup_before_exit():
     except Exception as e:
         print(f"[Spark] ⚠️ Failed to unmute: {e}")
     if _db is not None and _session_id is not None:
+        # Final extraction pass so a session's last stretch of conversation
+        # (since the last periodic pass) isn't lost just because the app
+        # quit rather than idling out — best-effort, since a hung/slow
+        # Claude call here shouldn't block shutdown from completing.
+        try:
+            recent = store.load_recent_messages(_db, limit=30)
+            memory.extract_and_store(_db, _session_id, _transcript_text(recent))
+        except Exception as e:
+            print(f"[Spark] ⚠️ Memory extraction on shutdown failed: {e}")
         store.end_session(_db, _session_id)
     write_status("inactive")
 
@@ -473,7 +490,8 @@ def process_claude_turn(line, chat_history):
 
     def run_claude():
         reply, model_used, tools_called, tool_calls_log = route_gpt_reply(
-            line, chat_history, screenshot_enabled=True, on_sentence=on_sentence
+            line, chat_history, screenshot_enabled=True, on_sentence=on_sentence,
+            session_id=_session_id
         )
         result["reply"] = reply
         result["model_used"] = model_used
@@ -530,6 +548,7 @@ def main():
     _db = store.init_db()
     _session_id = store.start_session(_db)
     chat_history = store.load_recent_messages(_db, limit=20)
+    turn_count = 0
 
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
@@ -605,6 +624,20 @@ def main():
                     _db, _session_id, "tool",
                     f"{call['summary']} -> {call['result'][:200]}"
                 )
+
+            # Periodic memory extraction (Phase 5) — every N real turns, in
+            # addition to the pass at session end (cleanup_before_exit), so a
+            # long session doesn't lose everything to a crash before it's
+            # ever extracted. Runs synchronously here (blocking the next
+            # dequeue briefly) rather than on a background thread, since it
+            # needs the shared _db connection, which is only safe to use
+            # from this thread (see store.py's docstring).
+            turn_count += 1
+            if turn_count % memory.EXTRACT_EVERY_N_TURNS == 0:
+                try:
+                    memory.extract_and_store(_db, _session_id, _transcript_text(chat_history))
+                except Exception as e:
+                    print(f"[Spark] ⚠️ Periodic memory extraction failed: {e}")
 
             start_idle_timer(45)
 

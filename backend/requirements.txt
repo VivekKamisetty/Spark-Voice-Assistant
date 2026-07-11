@@ -6,6 +6,7 @@ python-dotenv==1.2.2
 pyttsx3==2.99
 websockets==16.0
 kokoro==0.9.4
+sentence-transformers==3.3.1
 
 # dev/test
 pytest==9.1.1

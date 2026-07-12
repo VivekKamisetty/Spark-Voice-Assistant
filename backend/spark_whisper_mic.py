@@ -17,6 +17,7 @@ import ws_server
 import protocol
 import store
 import memory
+import briefing
 import audio_bands
 import confirmation_gate
 import mic_control
@@ -142,6 +143,24 @@ def calibrate_vad_threshold(duration=2.0):
 
 
 print = functools.partial(print, flush=True)
+
+# Phase 6: start gathering+composing the morning briefing (if today's
+# conditions call for one) on a background thread as early in startup as
+# possible — before Kokoro/Whisper model loading and VAD calibration below,
+# not after. Those are the only other things startup is doing before Spark
+# is actually "live", so this overlaps the briefing's network/IO-bound work
+# (osascript calls, weather, one Claude call) with them instead of adding to
+# the wait once the app is already ready and the user could start talking.
+# main() joins this thread and delivers whatever it produced — see there for
+# why this is a plain dict rather than a return value (the thread itself has
+# nowhere to return one to).
+_briefing_prefetch = {}
+
+def _prefetch_briefing():
+    _briefing_prefetch["text"] = briefing.prepare_briefing_text()
+
+briefing_prefetch_thread = threading.Thread(target=_prefetch_briefing, daemon=True)
+briefing_prefetch_thread.start()
 
 # Kokoro is the primary engine (chosen after a direct side-by-side listening
 # comparison against pyttsx3); pyttsx3 stays available as a fallback behind
@@ -396,6 +415,24 @@ def speak_reply(text, show_popup=False):
     _post_speech_cleanup()
 
 
+def speak_briefing(text):
+    """Like speak_reply, but doesn't also broadcast the text as a generic
+    assistant reply (write_status's text= param does that as a side effect).
+    The morning briefing (Phase 6) has its own dedicated protocol message
+    and labeled UI treatment — briefing.py broadcasts protocol.briefing_
+    message() itself, before calling this — so going through write_status's
+    text param here too would show the same text twice: once unlabeled
+    (immediately, via the generic assistant_chunk path) and once labeled
+    (only after TTS finishes, since that broadcast happens after speak_fn
+    returns).
+    """
+    write_status("speaking")
+
+    mic_control.mute_microphone()
+    tts_engine.speak_stream(iter([text]))
+    _post_speech_cleanup()
+
+
 def incoming_message_watcher(transcript_queue):
     """Watches messages the frontend sends back over the WebSocket:
     - interrupt: tap-to-interrupt (Phase 2) — stop whatever TTS is playing.
@@ -550,6 +587,27 @@ def main():
     chat_history = store.load_recent_messages(_db, limit=20)
     turn_count = 0
 
+    # Phase 6: deliver the morning briefing (if today's conditions call for
+    # one) BEFORE starting the mic listener / typed-input watcher, or
+    # announcing "listening" at all. If Spark were already accepting input
+    # while the briefing was still being gathered or spoken, anything the
+    # user said in that window would sit unanswered until the briefing
+    # finished — reading as Spark ignoring them and then barging in with a
+    # briefing over an unaddressed request. Blocking here instead means
+    # nothing is capturing input until the briefing is fully done, so there
+    # is no window for that confusion.
+    #
+    # This doesn't add wait time on top of what's already there: the
+    # gathering itself started as early as possible, on
+    # briefing_prefetch_thread at module load — before Kokoro/Whisper
+    # warmup and VAD calibration above even ran — so this join only waits
+    # for whatever of that work didn't already finish during that other
+    # startup time.
+    briefing_prefetch_thread.join(timeout=60)
+    prefetched_briefing_text = _briefing_prefetch.get("text")
+    if prefetched_briefing_text:
+        briefing.deliver_prepared_briefing(prefetched_briefing_text, speak_fn=speak_briefing)
+
     transcript_queue = queue.Queue()
     threading.Thread(target=mic_listener, args=(transcript_queue,), daemon=True).start()
     threading.Thread(target=incoming_message_watcher, args=(transcript_queue,), daemon=True).start()
@@ -565,6 +623,19 @@ def main():
             # form rather than normalized_line directly — otherwise none of
             # them would ever match real transcribed speech.
             stripped_line = normalized_line.strip(".,!?")
+
+            # Fallback for a long-running session that crosses midnight
+            # without a restart (the launch-time delivery above only covers
+            # a fresh launch on the new day). This one genuinely can
+            # interrupt an in-progress interaction -- by the time any
+            # utterance reaches this point the mic has already been running
+            # since launch, so unlike the launch-time case there's no way to
+            # guarantee nothing was mid-flight. Accepted as a rare edge case
+            # (a session spanning two calendar days) rather than something
+            # worth complicating the common path for; is a no-op on every
+            # ordinary day since the launch-time delivery already marked
+            # today done.
+            briefing.maybe_deliver_briefing(speak_fn=speak_briefing)
 
             if stripped_line in CLEAR_HISTORY_PHRASES:
                 cancel_idle_timer()

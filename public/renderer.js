@@ -101,8 +101,7 @@ function handleSparkMessage(msg) {
       break;
 
     case 'briefing':
-      // Phase 6 feature — not wired up on the UI side yet.
-      console.log('[Spark UI] briefing', msg);
+      renderBriefing(msg.text);
       break;
 
     default:
@@ -246,9 +245,57 @@ function finalizeAssistantMessage() {
   highestSpokenIndex = -1;
 }
 
+// Arrives as one complete message (not streamed sentence-by-sentence like
+// assistant_chunk), and isn't a reply to anything the user said — rendered
+// as its own labeled bubble rather than reusing appendAssistantChunk's
+// streaming-cursor machinery, which assumes an in-progress reply.
+//
+// Prepended rather than clearing the container: the backend's other trigger
+// for this (first real utterance of the day, not just app launch — see
+// spark_whisper_mic.py) fires *after* that utterance's own transcript has
+// already been rendered, so clearing here would silently wipe the user's
+// just-shown message right before Spark's reply to it arrives. Prepending
+// keeps the briefing visually first (it was spoken first) without erasing
+// the exchange that triggered it.
+function renderBriefing(text) {
+  const container = getTranscriptContainer();
+  currentAssistantEl = null;
+  currentUserEl = null;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message assistant briefing';
+
+  const label = document.createElement('div');
+  label.className = 'briefing-label';
+  label.textContent = '🌅 Morning Briefing';
+  wrapper.appendChild(label);
+
+  const body = document.createElement('div');
+  body.className = 'sentence';
+  body.innerHTML = marked.parse(text);
+  wrapper.appendChild(body);
+
+  container.prepend(wrapper);
+  expandPanel();
+  // Deliberately scrollTranscriptToTop, not …ToBottom: the briefing is
+  // prepended as the first thing in the panel, and on a shorter screen
+  // (smaller maxPanelHeight — see expandPanel) a multi-sentence briefing can
+  // be taller than the visible area. Scrolling to bottom (the normal
+  // behavior for a growing reply) would scroll straight past the label and
+  // opening sentences — found live from a real screenshot where exactly
+  // that happened, showing only the tail end of the message with no label
+  // visible at all.
+  scrollTranscriptToTop();
+}
+
 function scrollTranscriptToBottom() {
   const scroll = document.getElementById('transcript-scroll');
   scroll.scrollTop = scroll.scrollHeight;
+}
+
+function scrollTranscriptToTop() {
+  const scroll = document.getElementById('transcript-scroll');
+  scroll.scrollTop = 0;
 }
 
 // --- Tool activity ---

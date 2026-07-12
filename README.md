@@ -29,7 +29,7 @@ flowchart TD
     UI <-->|"WebSocket protocol v2\n(ws://localhost:8765)"| Python
 ```
 
-The two halves only ever talk over a versioned WebSocket protocol (`backend/protocol.py`) — the Electron app spawns the Python backend as a child process (`src/main.js`) and everything else flows through that socket. See [`docs/SPARK_V2_SPEC.md`](docs/SPARK_V2_SPEC.md) for the full phase-by-phase implementation history and design rationale.
+The two halves only ever talk over a versioned WebSocket protocol (`backend/protocol.py`) — the Electron app spawns the Python backend as a child process (`src/main.js`) and everything else flows through that socket. For a full module-by-module deep dive into how the code actually works, see [`docs/CODEBASE_GUIDE.md`](docs/CODEBASE_GUIDE.md); for the phase-by-phase development history and design rationale behind it, see [`docs/SPARK_V2_SPEC.md`](docs/SPARK_V2_SPEC.md).
 
 ## Requirements
 
@@ -98,6 +98,7 @@ backend/
   risk_classifier.py      Allowlist-first risk classification for shell commands
   tests/                  pytest suite
 docs/
+  CODEBASE_GUIDE.md        Module-by-module deep dive into how the code works
   SPARK_V2_SPEC.md         Full implementation spec, phase by phase
   E2E_TEST_SCRIPT.md       Manual end-to-end test script
 ```

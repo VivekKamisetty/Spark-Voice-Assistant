@@ -100,7 +100,7 @@ Per the v2 contract, both sides must ignore unrecognized message types rather th
 
 `mic_listener()` (in `spark_whisper_mic.py`) is the real work:
 
-1. Resolves the input device by name (`"MacBook Pro Microphone"`, hardcoded — see [Known limitations](../README.md#known-limitations)), falling back to device 0 if not found.
+1. Resolves the input device via `get_input_device_id()` — defaults to whatever macOS currently considers the default input device (`sd.default.device[0]`, portable across any Mac/mic setup), overridable with `SPARK_MIC_DEVICE_NAME` (a case-insensitive substring match against device names) for a multi-mic setup where the OS default isn't the one Spark should use. The same function also picks the device `calibrate_vad_threshold()` records ambient noise from, so the two always agree.
 2. Opens a `sounddevice.InputStream` and pulls raw blocks off a queue that the stream's own callback fills.
 3. For each block: computes `max_amplitude`, and if it clears `vad_threshold` *and* `mic_control.should_listen`, appends the block to the current utterance and marks speech as detected.
 4. Once speech has started, keeps appending blocks through a **grace period** even after the volume dips back under threshold — short words trail off in volume before they're actually finished, and only appending over-threshold blocks used to truncate them to a handful of milliseconds. The utterance only actually ends once `max_silence_time` (1s) of continuous sub-threshold audio has passed, or a hard `max_recording_time` (10s) safety cap is hit.

@@ -119,10 +119,42 @@ def cleanup_before_exit():
 
 atexit.register(cleanup_before_exit)
 
+def get_input_device_id():
+    """Resolves which input device to record from. Defaults to whatever
+    macOS currently considers the default input device — portable across
+    any Mac model or mic setup, no hardcoded device name needed.
+    SPARK_MIC_DEVICE_NAME (a case-insensitive substring match against device
+    names) overrides this, for a multi-mic setup where the OS default isn't
+    the one Spark should actually use.
+    """
+    override = os.getenv("SPARK_MIC_DEVICE_NAME", "").strip()
+    if override:
+        for i, dev in enumerate(sd.query_devices()):
+            if override.lower() in dev["name"].lower() and dev["max_input_channels"] > 0:
+                print(f"[Spark] Using device #{i}: {dev['name']} (SPARK_MIC_DEVICE_NAME='{override}')")
+                return i
+        print(f"[Spark] ⚠️ No input device matching SPARK_MIC_DEVICE_NAME='{override}', "
+              "falling back to the system default input device.")
+
+    try:
+        default_id = sd.default.device[0]
+        if default_id is not None and default_id >= 0:
+            print(f"[Spark] Using system default input device #{default_id}: "
+                  f"{sd.query_devices(default_id)['name']}")
+            return default_id
+    except Exception as e:
+        print(f"[Spark] ⚠️ Couldn't resolve the system default input device ({e}), "
+              "falling back to device #0.")
+
+    return 0
+
 def calibrate_vad_threshold(duration=2.0):
     print("[Spark] 🧪 Calibrating ambient noise...")
     write_status("calibrating")
-    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+    audio = sd.rec(
+        int(duration * sample_rate), samplerate=sample_rate, channels=1,
+        dtype='float32', device=get_input_device_id(),
+    )
     sd.wait()
     audio = audio.flatten()
 
@@ -175,9 +207,14 @@ except Exception as e:
 # bigger, more accurate model than the old CPU-only openai-whisper setup for
 # comparable latency. The prompt below biases decoding toward vocabulary that
 # general-purpose Whisper models otherwise consistently mis-hear (proper
-# nouns and uncommon names aren't well represented in training data).
+# nouns and uncommon names aren't well represented in training data) — the
+# base terms are specific to this app; SPARK_VOCAB_PROMPT lets each user add
+# their own name and anything else Whisper tends to mishear for them,
+# instead of that being hardcoded to one specific person.
 MLX_MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
-VOCAB_PROMPT = "Vivek Kamisetty, Claude, Anthropic, Spark, Whisper."
+_BASE_VOCAB_PROMPT = "Claude, Anthropic, Spark, Whisper."
+_EXTRA_VOCAB = os.getenv("SPARK_VOCAB_PROMPT", "").strip()
+VOCAB_PROMPT = f"{_EXTRA_VOCAB} {_BASE_VOCAB_PROMPT}" if _EXTRA_VOCAB else _BASE_VOCAB_PROMPT
 
 ws_server.start()
 sample_rate = 16000
@@ -196,15 +233,6 @@ def audio_callback(indata, frames, time_info, status):
         print(f"[Audio] {status}")
     q.put(indata.copy())
 
-def get_device_id_by_name(name_keyword):
-    devices = sd.query_devices()
-    for i, dev in enumerate(devices):
-        if name_keyword.lower() in dev["name"].lower() and dev["max_input_channels"] > 0:
-            print(f"[Spark] Using device #{i}: {dev['name']}")
-            return i
-    print("[Spark] ❌ Mic keyword not found, falling back to default device #0")
-    return 0
-
 # Whisper reliably hallucinates these exact filler words on quiet/noisy
 # clips with no real speech in them (see the no_speech_prob/temperature
 # checks below for the more reliable signal this backs up). Shared at
@@ -219,11 +247,7 @@ POLITE_PHRASES = {
 
 
 def mic_listener(transcript_queue):
-    try:
-        device_id = get_device_id_by_name("MacBook Pro Microphone")
-    except ValueError as e:
-        print(f"[Error] {e}")
-        return
+    device_id = get_input_device_id()
 
     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, callback=audio_callback):
         while True:

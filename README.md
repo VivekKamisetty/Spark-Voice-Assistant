@@ -76,7 +76,7 @@ Quit with the window's own controls, or however you'd normally quit a macOS app 
 
 ## Configuration
 
-- **`backend/.env`** — `ANTHROPIC_API_KEY` (required), `SPARK_VOICE_MODE` (optional: `brief` / `full` / `muted` — see `backend/.env.example`).
+- **`backend/.env`** — `ANTHROPIC_API_KEY` (required), plus three optional settings (see `backend/.env.example` for details): `SPARK_VOICE_MODE` (`brief` / `full` / `muted`), `SPARK_MIC_DEVICE_NAME` (only needed if you have multiple mics and want to override the auto-detected system default), and `SPARK_VOCAB_PROMPT` (your name, to help Whisper recognize it correctly).
 - **`~/.spark/config.json`** — morning-briefing settings (enabled/disabled, cached location). No in-app UI for this yet; edit the JSON directly.
 - **`~/.spark/spark.db`** — SQLite conversation history. Say "clear history" to wipe it (with confirmation).
 

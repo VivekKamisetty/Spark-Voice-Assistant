@@ -62,6 +62,20 @@ ipcMain.on('set-mouse-events', (event, interactive) => {
   }
 });
 
+// Spark going idle (45s of no input — see start_idle_timer in
+// spark_whisper_mic.py) hides the window rather than leaving it sitting on
+// screen with nothing happening; it reappears the moment a new turn starts
+// (any non-idle state). The mic keeps listening the whole time regardless of
+// window visibility, so this is purely cosmetic — no wake word needed to
+// bring it back, just start talking. See renderer.js's onStateChange.
+ipcMain.on('visibility-show', () => {
+  if (win) win.show();
+});
+
+ipcMain.on('visibility-hide', () => {
+  if (win) win.hide();
+});
+
 
 let quitting = false;
 

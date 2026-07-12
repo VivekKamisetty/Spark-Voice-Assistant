@@ -130,6 +130,12 @@ function onStateChange(state) {
   const stopButton = document.getElementById('stop-button');
   if (stopButton) stopButton.classList.toggle('hidden', state !== 'speaking');
 
+  // Spark going idle (45s of no input) hides the window rather than leaving
+  // it sitting on screen with nothing happening; any other state means a new
+  // turn has started, so bring it back. The mic keeps listening the whole
+  // time regardless — this is purely cosmetic, not a wake-word gate.
+  ipcRenderer.send(state === 'idle' ? 'visibility-hide' : 'visibility-show');
+
   if (state === 'listening') {
     // A fresh turn is starting (or we've returned to rest) — clear the
     // in-progress streaming bubble so the next reply starts its own.
